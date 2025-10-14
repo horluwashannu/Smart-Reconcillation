@@ -170,7 +170,7 @@ export function SmartCallOver() {
                     <TableHead>Processor</TableHead>
                     <TableHead>Authorizer</TableHead>
                     <TableHead>Ticket Ref</TableHead>
-                    <TableHead>Correct/Exception</TableHead>
+                    <TableHead>Okay/Exception</TableHead>
                     <TableHead>Reason</TableHead>
                     <TableHead>Status</TableHead>
                   </TableRow>
