@@ -1,46 +1,46 @@
-"use client"
+"use client";
 
-import React, { useState } from "react"
-import * as XLSX from "xlsx"
-import Fuse from "fuse.js"
+import React, { useState } from "react";
+import * as XLSX from "xlsx";
+import Fuse from "fuse.js";
 
 interface Row {
-  Date: string
-  Narration: string
-  Account: string
-  Amount: number
-  Type: string
-  RefNo: string
+  Date: string;
+  Narration: string;
+  Account: string;
+  Amount: number;
+  Type: string;
+  RefNo: string;
 }
 
 interface ComparisonResult extends Row {
-  Status: string
-  Remarks?: string
+  Status: string;
+  Remarks?: string;
 }
 
 const CallOverPage: React.FC = () => {
-  const [user, setUser] = useState("")
-  const [role, setRole] = useState("")
-  const [tickets, setTickets] = useState<Row[]>([])
-  const [gl, setGl] = useState<Row[]>([])
-  const [results, setResults] = useState<ComparisonResult[]>([])
+  const [user, setUser] = useState("");
+  const [role, setRole] = useState("");
+  const [tickets, setTickets] = useState<Row[]>([]);
+  const [gl, setGl] = useState<Row[]>([]);
+  const [results, setResults] = useState<ComparisonResult[]>([]);
 
   const handleFileUpload = (
     e: React.ChangeEvent<HTMLInputElement>,
     setter: React.Dispatch<React.SetStateAction<Row[]>>
   ) => {
-    const file = e.target.files?.[0]
-    if (!file) return
+    const file = e.target.files?.[0];
+    if (!file) return;
 
-    const reader = new FileReader()
+    const reader = new FileReader();
     reader.onload = (evt) => {
-      const data = evt.target?.result
-      if (!data) return
+      const data = evt.target?.result;
+      if (!data) return;
 
-      const workbook = XLSX.read(data, { type: "binary" })
-      const sheetName = workbook.SheetNames[0]
-      const worksheet = workbook.Sheets[sheetName]
-      const jsonData: Row[] = XLSX.utils.sheet_to_json(worksheet, { defval: "" }) as Row[]
+      const workbook = XLSX.read(data, { type: "binary" });
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const jsonData: Row[] = XLSX.utils.sheet_to_json(worksheet, { defval: "" }) as Row[];
       setter(
         jsonData.map((r) => ({
           Date: r.Date,
@@ -50,45 +50,47 @@ const CallOverPage: React.FC = () => {
           Type: r.Type,
           RefNo: r.RefNo,
         }))
-      )
-    }
-    reader.readAsBinaryString(file)
-  }
+      );
+    };
+    reader.readAsBinaryString(file);
+  };
 
   const compareData = () => {
-    const fuse = new Fuse(gl, { keys: ["Narration"], threshold: 0.3 })
+    const fuse = new Fuse(gl, { keys: ["Narration"], threshold: 0.3 });
+
     const comparison: ComparisonResult[] = tickets.map((ticket) => {
-      const match = fuse.search(ticket.Narration)[0]
+      const match = fuse.search(ticket.Narration)[0];
       if (match) {
-        const glRow = match.item
+        const glRow = match.item;
         if (glRow.Amount === ticket.Amount && glRow.Date === ticket.Date) {
-          return { ...ticket, Status: "Matched" }
+          return { ...ticket, Status: "Matched" };
         }
-        return { ...ticket, Status: "Mismatch", Remarks: "Amount or Date differs" }
+        return { ...ticket, Status: "Mismatch", Remarks: "Amount or Date differs" };
       } else {
-        return { ...ticket, Status: "Pending Post", Remarks: "Missing in GL" }
+        return { ...ticket, Status: "Pending Post", Remarks: "Missing in GL" };
       }
-    })
+    });
 
     // Detect duplicates in GL
     const duplicates = gl.reduce((acc, row, idx, arr) => {
-      const count = arr.filter((r) => r.Amount === row.Amount && r.RefNo === row.RefNo).length
-      if (count > 1) acc.push(row.RefNo)
-      return acc
-    }, [] as string[])
+      const count = arr.filter((r) => r.Amount === row.Amount && r.RefNo === row.RefNo).length;
+      if (count > 1) acc.push(row.RefNo);
+      return acc;
+    }, [] as string[]);
 
     const finalResults = comparison.map((r) =>
       duplicates.includes(r.RefNo) ? { ...r, Status: "Duplicate", Remarks: "Duplicate in GL" } : r
-    )
-    setResults(finalResults)
-  }
+    );
+
+    setResults(finalResults);
+  };
 
   const exportExcel = () => {
-    const worksheet = XLSX.utils.json_to_sheet(results)
-    const workbook = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(workbook, worksheet, "CallOver")
-    XLSX.writeFile(workbook, `CallOver_Exceptions_${new Date().toISOString().slice(0, 10)}.xlsx`)
-  }
+    const worksheet = XLSX.utils.json_to_sheet(results);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "CallOver");
+    XLSX.writeFile(workbook, `CallOver_Exceptions_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  };
 
   const metrics = {
     totalTickets: results.length,
@@ -96,7 +98,7 @@ const CallOverPage: React.FC = () => {
     mismatched: results.filter((r) => r.Status === "Mismatch").length,
     missing: results.filter((r) => r.Status === "Pending Post").length,
     duplicates: results.filter((r) => r.Status === "Duplicate").length,
-  }
+  };
 
   return (
     <div className="p-6">
@@ -120,15 +122,11 @@ const CallOverPage: React.FC = () => {
         />
       </div>
 
-      {/* Uploads */}
+      {/* File Uploads */}
       <div className="flex flex-wrap gap-6 mb-6">
         <div>
           <label className="block mb-2 font-medium">Upload Tickets Register:</label>
-          <input
-            type="file"
-            accept=".xlsx,.xls"
-            onChange={(e) => handleFileUpload(e, setTickets)}
-          />
+          <input type="file" accept=".xlsx,.xls" onChange={(e) => handleFileUpload(e, setTickets)} />
         </div>
         <div>
           <label className="block mb-2 font-medium">Upload GL Statement:</label>
@@ -136,6 +134,7 @@ const CallOverPage: React.FC = () => {
         </div>
       </div>
 
+      {/* Actions */}
       <div className="flex gap-4 mb-6">
         <button
           onClick={compareData}
@@ -225,7 +224,7 @@ const CallOverPage: React.FC = () => {
         </div>
       )}
     </div>
-  )
-}
+  );
+};
 
-export default CallOverPage
+export default CallOverPage;
