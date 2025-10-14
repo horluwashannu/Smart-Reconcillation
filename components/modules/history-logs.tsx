@@ -10,16 +10,17 @@ interface Transaction {
   Amount: number;
   Type: "Debit" | "Credit";
   RefNo: string;
-  Status?: string; // Matched, Mismatch, Pending, Duplicate
+  Status?: string;
   Remarks?: string;
 }
 
 const App: React.FC = () => {
+  const [user, setUser] = useState("");
+  const [role, setRole] = useState("");
   const [tickets, setTickets] = useState<Transaction[]>([]);
   const [gls, setGLs] = useState<Transaction[]>([]);
   const [comparisonResults, setComparisonResults] = useState<Transaction[]>([]);
 
-  // Load previous comparison if exists
   useEffect(() => {
     const stored = localStorage.getItem("comparisonResults");
     if (stored) setComparisonResults(JSON.parse(stored));
@@ -69,12 +70,13 @@ const App: React.FC = () => {
   };
 
   const runComparison = () => {
-    const results: Transaction[] = [];
+    if (!user || !role) {
+      alert("Please enter User and Role before running comparison");
+      return;
+    }
 
-    const fuse = new Fuse(gls, {
-      keys: ["Narration"],
-      threshold: 0.4, // Adjust for fuzzy matching
-    });
+    const results: Transaction[] = [];
+    const fuse = new Fuse(gls, { keys: ["Narration"], threshold: 0.4 });
 
     tickets.forEach((ticket) => {
       const glMatch = fuse.search(ticket.Narration);
@@ -90,7 +92,6 @@ const App: React.FC = () => {
       }
     });
 
-    // Check for duplicates in GL
     gls.forEach((gl) => {
       const count = gls.filter((x) => x.Amount === gl.Amount && x.RefNo === gl.RefNo).length;
       if (count > 1) {
@@ -124,6 +125,20 @@ const App: React.FC = () => {
       <h1>Call-Over Reconciliation</h1>
 
       <div style={{ marginBottom: 20 }}>
+        <input
+          placeholder="Enter User"
+          value={user}
+          onChange={(e) => setUser(e.target.value)}
+          style={{ marginRight: 10 }}
+        />
+        <input
+          placeholder="Enter Role"
+          value={role}
+          onChange={(e) => setRole(e.target.value)}
+        />
+      </div>
+
+      <div style={{ marginBottom: 20 }}>
         <input type="file" accept=".xlsx,.xls" onChange={(e) => handleFileUpload(e, "ticket")} />
         <span style={{ marginLeft: 10 }}>Upload Tickets Register</span>
       </div>
@@ -151,14 +166,14 @@ const App: React.FC = () => {
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            <th style={{ border: "1px solid black", padding: 8 }}>Date</th>
-            <th style={{ border: "1px solid black", padding: 8 }}>Narration</th>
-            <th style={{ border: "1px solid black", padding: 8 }}>Account</th>
-            <th style={{ border: "1px solid black", padding: 8 }}>Amount</th>
-            <th style={{ border: "1px solid black", padding: 8 }}>Type</th>
-            <th style={{ border: "1px solid black", padding: 8 }}>Ref No</th>
-            <th style={{ border: "1px solid black", padding: 8 }}>Status</th>
-            <th style={{ border: "1px solid black", padding: 8 }}>Remarks</th>
+            <th>Date</th>
+            <th>Narration</th>
+            <th>Account</th>
+            <th>Amount</th>
+            <th>Type</th>
+            <th>Ref No</th>
+            <th>Status</th>
+            <th>Remarks</th>
           </tr>
         </thead>
         <tbody>
@@ -168,14 +183,14 @@ const App: React.FC = () => {
               res.Status === "Pending Post" ? "#ffcdd2" :
               res.Status === "Duplicate" ? "#f8bbd0" : "white"
             }}>
-              <td style={{ border: "1px solid black", padding: 8 }}>{res.Date}</td>
-              <td style={{ border: "1px solid black", padding: 8 }}>{res.Narration}</td>
-              <td style={{ border: "1px solid black", padding: 8 }}>{res.Account}</td>
-              <td style={{ border: "1px solid black", padding: 8 }}>{res.Amount}</td>
-              <td style={{ border: "1px solid black", padding: 8 }}>{res.Type}</td>
-              <td style={{ border: "1px solid black", padding: 8 }}>{res.RefNo}</td>
-              <td style={{ border: "1px solid black", padding: 8 }}>{res.Status}</td>
-              <td style={{ border: "1px solid black", padding: 8 }}>{res.Remarks}</td>
+              <td>{res.Date}</td>
+              <td>{res.Narration}</td>
+              <td>{res.Account}</td>
+              <td>{res.Amount}</td>
+              <td>{res.Type}</td>
+              <td>{res.RefNo}</td>
+              <td>{res.Status}</td>
+              <td>{res.Remarks}</td>
             </tr>
           ))}
         </tbody>
