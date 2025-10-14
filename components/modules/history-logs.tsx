@@ -1,11 +1,11 @@
 "use client"
 
-import React, { useState, useEffect } from "react"
+import React, { useState } from "react"
 import * as XLSX from "xlsx"
-import { Upload, CheckCircle, AlertCircle, Send, Download } from "lucide-react"
+import { Upload, CheckCircle, AlertCircle, Send, FileSpreadsheet } from "lucide-react"
 
-/* ---------------- SAFE FALLBACK UI COMPONENTS ---------------- */
-const Card = ({ title, children }: { title?: string; children: any }) => (
+/* -------------------- UI Components -------------------- */
+const Card = ({ title, children }: { title?: string; children: React.ReactNode }) => (
   <div className="border border-gray-200 rounded-lg p-4 bg-white shadow-sm">
     {title && <h2 className="font-semibold text-lg mb-2">{title}</h2>}
     {children}
@@ -19,7 +19,7 @@ const Button = ({
   disabled,
 }: {
   onClick?: () => void
-  children: any
+  children: React.ReactNode
   variant?: "primary" | "danger" | "outline"
   disabled?: boolean
 }) => {
@@ -38,11 +38,11 @@ const Button = ({
   )
 }
 
-const Table = ({ children }: { children: any }) => (
+const Table = ({ children }: { children: React.ReactNode }) => (
   <table className="w-full text-sm border border-gray-200">{children}</table>
 )
 
-/* ---------------- MAIN CALL-OVER COMPONENT ---------------- */
+/* -------------------- Main Component -------------------- */
 interface CallOverRow {
   id: number
   Date: string
@@ -58,19 +58,7 @@ export default function CallOverPage() {
   const [rows, setRows] = useState<CallOverRow[]>([])
   const [ticketRef, setTicketRef] = useState("")
   const [officer, setOfficer] = useState("")
-  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-
-  /* Load saved report on mount */
-  useEffect(() => {
-    const saved = localStorage.getItem("calloverReport")
-    if (saved) {
-      const parsed = JSON.parse(saved)
-      setRows(parsed.data || [])
-      setTicketRef(parsed.ticketRef || "")
-      setOfficer(parsed.officer || "")
-    }
-  }, [])
 
   /* ---------- Upload Excel ---------- */
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -101,16 +89,16 @@ export default function CallOverPage() {
     }
   }
 
-  /* ---------- Row actions ---------- */
+  /* ---------- Row Actions ---------- */
   const toggleStatus = (id: number, status: "Correct" | "Exception") => {
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)))
+    setRows(prev => prev.map(r => (r.id === id ? { ...r, status } : r)))
   }
 
   const updateReason = (id: number, reason: string) => {
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, reason } : r)))
+    setRows(prev => prev.map(r => (r.id === id ? { ...r, reason } : r)))
   }
 
-  /* ---------- Submit locally ---------- */
+  /* ---------- Save to Local Storage ---------- */
   const handleSubmit = () => {
     if (!ticketRef || !officer) {
       alert("Please fill in Ticket Reference and Officer Name.")
@@ -127,7 +115,7 @@ export default function CallOverPage() {
     localStorage.setItem("calloverReport", JSON.stringify(report))
     alert("✅ Call-Over report saved locally.")
 
-    // Clear after save
+    // Clear form
     setRows([])
     setTicketRef("")
     setOfficer("")
@@ -135,12 +123,25 @@ export default function CallOverPage() {
 
   /* ---------- Export to Excel ---------- */
   const handleExport = () => {
+    if (rows.length === 0) {
+      alert("No data to export!")
+      return
+    }
+
     const ws = XLSX.utils.json_to_sheet(
-      rows.map(({ id, ...r }) => ({ ...r })) // remove id for export
+      rows.map(r => ({
+        Date: r.Date,
+        Narration: r.Narration,
+        Amount: r.Amount,
+        Processor: r.Processor,
+        Authorizer: r.Authorizer,
+        Status: r.status,
+        Reason: r.reason || "",
+      }))
     )
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, "CallOver")
-    XLSX.writeFile(wb, `CallOverReport_${Date.now()}.xlsx`)
+    XLSX.writeFile(wb, `callover_${new Date().toISOString()}.xlsx`)
   }
 
   return (
@@ -167,7 +168,7 @@ export default function CallOverPage() {
         </div>
       </Card>
 
-      {/* Table display */}
+      {/* Table */}
       {rows.length > 0 && (
         <Card title="Transaction Review">
           <div className="overflow-x-auto">
@@ -184,7 +185,7 @@ export default function CallOverPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {rows.map(r => (
                   <tr key={r.id} className="border-t border-gray-200">
                     <td className="p-2">{r.Date}</td>
                     <td className="p-2 max-w-xs truncate">{r.Narration}</td>
@@ -211,7 +212,7 @@ export default function CallOverPage() {
                       {r.status === "Exception" && (
                         <textarea
                           value={r.reason || ""}
-                          onChange={(e) => updateReason(r.id, e.target.value)}
+                          onChange={e => updateReason(r.id, e.target.value)}
                           className="w-full border border-gray-300 rounded p-1 text-sm"
                           placeholder="Enter reason"
                         />
@@ -225,46 +226,18 @@ export default function CallOverPage() {
         </Card>
       )}
 
-      {/* Submit & Export section */}
+      {/* Submit + Export */}
       {rows.length > 0 && (
         <Card title="Finalize & Submit">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="text-sm font-medium text-gray-700">Ticket Reference</label>
               <input
                 value={ticketRef}
-                onChange={(e) => setTicketRef(e.target.value)}
+                onChange={e => setTicketRef(e.target.value)}
                 className="mt-1 border border-gray-300 rounded p-2 w-full"
                 placeholder="e.g. TCK-2025-1003"
               />
             </div>
             <div>
-              <label className="text-sm font-medium text-gray-700">Call-Over Officer</label>
-              <input
-                value={officer}
-                onChange={(e) => setOfficer(e.target.value)}
-                className="mt-1 border border-gray-300 rounded p-2 w-full"
-                placeholder="Officer name"
-              />
-            </div>
-            <div className="flex gap-2">
-              <Button onClick={handleSubmit} disabled={loading}>
-                <Send className="inline-block h-4 w-4 mr-1" />
-                {loading ? "Submitting..." : "Submit"}
-              </Button>
-              <Button onClick={handleExport} variant="outline">
-                <Download className="inline-block h-4 w-4 mr-1" />
-                Export
-              </Button>
-            </div>
-          </div>
-        </Card>
-      )}
-
-      {/* Sample notification area */}
-      <div className="p-3 text-xs text-gray-500 border-t border-gray-200">
-        📧 <b>Sample Alert Space:</b> “Daily call-over summary will appear here when email service is enabled.”
-      </div>
-    </div>
-  )
-}
+              <label className="text-sm font-medium text-gray-700
