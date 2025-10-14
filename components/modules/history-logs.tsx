@@ -2,9 +2,9 @@
 
 import React, { useState } from "react"
 import * as XLSX from "xlsx"
-import { Upload, CheckCircle, AlertCircle, Send } from "lucide-react"
+import { Upload, CheckCircle, AlertCircle, Send, Download } from "lucide-react"
 
-/* ---------------- SAFE FALLBACK UI COMPONENTS ---------------- */
+/* ---------------- UI COMPONENTS ---------------- */
 const Card = ({ title, children }: { title?: string; children: React.ReactNode }) => (
   <div className="border border-gray-200 rounded-lg p-4 bg-white shadow-sm">
     {title && <h2 className="font-semibold text-lg mb-2">{title}</h2>}
@@ -121,6 +121,23 @@ export default function CallOverPage() {
     setOfficer("")
   }
 
+  /* ---------- Download JSON ---------- */
+  const handleDownload = () => {
+    const report = {
+      ticketRef,
+      officer,
+      date: new Date().toISOString(),
+      data: rows,
+    }
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `CallOverReport_${new Date().toISOString()}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <div className="p-6 space-y-6">
       <h1 className="text-2xl font-bold text-gray-900">Smart Call-Over</h1>
@@ -227,16 +244,20 @@ export default function CallOverPage() {
             </div>
           </div>
 
-          <div className="mt-4 flex justify-end">
+          <div className="mt-4 flex gap-3 justify-end">
             <Button onClick={handleSubmit} disabled={loading}>
               <Send className="inline-block h-4 w-4 mr-1" />
               {loading ? "Submitting..." : "Submit Report"}
+            </Button>
+            <Button onClick={handleDownload} variant="outline">
+              <Download className="inline-block h-4 w-4 mr-1" />
+              Download JSON
             </Button>
           </div>
         </Card>
       )}
 
-      {/* Empty alert space */}
+      {/* Sample alert space */}
       <div className="p-3 text-xs text-gray-500 border-t border-gray-200">
         📧 <b>Sample Alert Space:</b> “Daily call-over summary will appear here when email service is enabled.”
       </div>
