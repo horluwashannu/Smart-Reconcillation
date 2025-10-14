@@ -60,7 +60,7 @@ export function TopBar({ userRole, setUserRole, darkMode, setDarkMode }: TopBarP
             <DropdownMenuLabel>
               <div className="flex flex-col space-y-1">
                 <p className="text-sm font-medium">John Doe</p>
-                <p className="text-xs text-muted-foreground">john.doe@company.com</p>
+                <p className="text-xs text-muted-foreground">olakintunde@ecobank.com</p>
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
