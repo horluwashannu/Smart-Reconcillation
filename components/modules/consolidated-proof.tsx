@@ -9,14 +9,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Download, Save, Plus, Trash2 } from "lucide-react"
 import { BranchInfo } from "@/components/branch-info"
 import { getSupabase } from "@/lib/supabase"
+import * as XLSX from "xlsx"
 
-// Naira denominations from 1000 to 5
 const NAIRA_DENOMINATIONS = [1000, 500, 200, 100, 50, 20, 10, 5]
-// Dollar denominations
 const DOLLAR_DENOMINATIONS = [100, 50, 20, 10, 5, 1]
-// Pounds denominations
 const POUNDS_DENOMINATIONS = [50, 20, 10, 5, 1]
-// Euro denominations
 const EURO_DENOMINATIONS = [500, 200, 100, 50, 20, 10, 5]
 
 interface TellerData {
@@ -41,7 +38,6 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
   const [branchName, setBranchName] = useState("")
   const [country, setCountry] = useState("")
 
-  // Balance tracking - only Balance BF is editable
   const [balanceBF, setBalanceBF] = useState<{ [key: number]: number }>({})
 
   const getDenominations = () => {
@@ -115,13 +111,13 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
     return denominations.reduce((sum, denom) => {
       switch (type) {
         case "bf":
-          return sum + (balanceBF[denom] || 0) * denom
+          return sum + (balanceBF[denom] || 0)
         case "deposit":
-          return sum + calculateTotalDeposit(denom) * denom
+          return sum + calculateTotalDeposit(denom)
         case "withdrawal":
-          return sum + calculateTotalWithdrawal(denom) * denom
+          return sum + calculateTotalWithdrawal(denom)
         case "balance":
-          return sum + calculateTotalBalance(denom) * denom
+          return sum + calculateTotalBalance(denom)
         default:
           return sum
       }
@@ -169,13 +165,72 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
       })
 
       if (error) throw error
-      console.log("[v0] Consolidated proof saved to Supabase")
-      alert("Consolidated proof saved successfully!")
+      alert("✅ Consolidated proof saved successfully to Supabase!")
     } catch (error) {
-      console.log("[v0] Supabase not configured, saving to localStorage")
       localStorage.setItem("consolidatedProof", JSON.stringify(proofData))
-      alert("Consolidated proof saved to local storage")
+      alert("⚠️ Saved locally (Supabase unavailable).")
     }
+  }
+
+  // ✅ New Excel Export Function
+  const handleExport = () => {
+    const date = new Date().toISOString().split("T")[0]
+
+    const sheet1Data = [
+      ["Branch Name", branchName],
+      ["Branch Code", branchCode],
+      ["Country", country],
+      ["Currency", currency.toUpperCase()],
+      ["Date", date],
+      [],
+      ["Denomination", "Balance B/F", "Total Deposit", "Total Withdrawal", "Total Balance"],
+      ...getDenominations().map((denom) => [
+        `${getCurrencySymbol()}${denom}`,
+        balanceBF[denom] || 0,
+        calculateTotalDeposit(denom),
+        calculateTotalWithdrawal(denom),
+        calculateTotalBalance(denom),
+      ]),
+      [],
+      [
+        "TOTALS",
+        calculateGrandTotal("bf"),
+        calculateGrandTotal("deposit"),
+        calculateGrandTotal("withdrawal"),
+        calculateGrandTotal("balance"),
+      ],
+    ]
+
+    const sheet2Data: any[] = [
+      ["Teller ID", "Teller Name", "Denomination", "Buy (Deposit)", "Sell (Withdrawal)"],
+    ]
+
+    tellers.forEach((teller) => {
+      getDenominations().forEach((denom) => {
+        sheet2Data.push([
+          teller.id,
+          teller.name,
+          `${getCurrencySymbol()}${denom}`,
+          teller.buy[denom] || 0,
+          teller.sell[denom] || 0,
+        ])
+      })
+    })
+
+    const wb = XLSX.utils.book_new()
+    const ws1 = XLSX.utils.aoa_to_sheet(sheet1Data)
+    const ws2 = XLSX.utils.aoa_to_sheet(sheet2Data)
+
+    XLSX.utils.book_append_sheet(wb, ws1, "Summary")
+    XLSX.utils.book_append_sheet(wb, ws2, "Teller Breakdown")
+
+    XLSX.writeFile(wb, `Consolidated_Proof_Report_${date}.xlsx`)
+    alert("✅ Excel report exported successfully!")
+  }
+
+  const formatNumber = (num: number | undefined) => {
+    if (!num) return "0"
+    return num.toLocaleString(undefined, { minimumFractionDigits: 0 })
   }
 
   return (
@@ -187,12 +242,10 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
         </div>
         <div className="flex gap-2">
           <Button onClick={handleSave} className="bg-gradient-to-r from-primary to-accent gap-2">
-            <Save className="h-4 w-4" />
-            Save
+            <Save className="h-4 w-4" /> Save
           </Button>
-          <Button variant="outline" className="gap-2 bg-transparent">
-            <Download className="h-4 w-4" />
-            Export
+          <Button onClick={handleExport} variant="outline" className="gap-2 bg-transparent">
+            <Download className="h-4 w-4" /> Export Excel
           </Button>
         </div>
       </div>
@@ -224,10 +277,11 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
               <CardContent>
                 <div className="text-2xl font-bold text-card-foreground">
                   {getCurrencySymbol()}
-                  {calculateGrandTotal("bf").toLocaleString()}
+                  {formatNumber(calculateGrandTotal("bf"))}
                 </div>
               </CardContent>
             </Card>
+
             <Card className="border-primary/20 bg-card/50 backdrop-blur">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium text-card-foreground">Total Deposit</CardTitle>
@@ -235,11 +289,12 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
               <CardContent>
                 <div className="text-2xl font-bold text-chart-3">
                   {getCurrencySymbol()}
-                  {calculateGrandTotal("deposit").toLocaleString()}
+                  {formatNumber(calculateGrandTotal("deposit"))}
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">Auto-calculated from teller buys</p>
               </CardContent>
             </Card>
+
             <Card className="border-primary/20 bg-card/50 backdrop-blur">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium text-card-foreground">Total Withdrawal</CardTitle>
@@ -247,11 +302,12 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
               <CardContent>
                 <div className="text-2xl font-bold text-destructive">
                   {getCurrencySymbol()}
-                  {calculateGrandTotal("withdrawal").toLocaleString()}
+                  {formatNumber(calculateGrandTotal("withdrawal"))}
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">Auto-calculated from teller sells</p>
               </CardContent>
             </Card>
+
             <Card className="border-primary/20 bg-card/50 backdrop-blur">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium text-card-foreground">Total Balance</CardTitle>
@@ -259,7 +315,7 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
               <CardContent>
                 <div className="text-2xl font-bold text-primary">
                   {getCurrencySymbol()}
-                  {calculateGrandTotal("balance").toLocaleString()}
+                  {formatNumber(calculateGrandTotal("balance"))}
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">BF + Deposit - Withdrawal</p>
               </CardContent>
@@ -271,7 +327,7 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
             <CardHeader>
               <CardTitle className="text-card-foreground">Denomination Breakdown</CardTitle>
               <CardDescription>
-                Balance B/F is editable. Deposit and Withdrawal are auto-calculated from teller transactions
+                Balance B/F is editable. Deposit and Withdrawal auto-update from teller entries.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -296,26 +352,22 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
                         <td className="py-3 text-right">
                           <Input
                             type="number"
-                            className="w-24 text-right"
+                            className="w-28 text-right"
                             value={balanceBF[denom] || ""}
                             onChange={(e) =>
-                              setBalanceBF({ ...balanceBF, [denom]: Number.parseInt(e.target.value) || 0 })
+                              setBalanceBF({ ...balanceBF, [denom]: Number.parseFloat(e.target.value) || 0 })
                             }
                             placeholder="0"
                           />
                         </td>
-                        <td className="py-3 text-right">
-                          <div className="w-24 inline-block text-right font-mono text-chart-3 font-semibold">
-                            {calculateTotalDeposit(denom)}
-                          </div>
+                        <td className="py-3 text-right font-mono text-chart-3 font-semibold">
+                          {formatNumber(calculateTotalDeposit(denom))}
                         </td>
-                        <td className="py-3 text-right">
-                          <div className="w-24 inline-block text-right font-mono text-destructive font-semibold">
-                            {calculateTotalWithdrawal(denom)}
-                          </div>
+                        <td className="py-3 text-right font-mono text-destructive font-semibold">
+                          {formatNumber(calculateTotalWithdrawal(denom))}
                         </td>
-                        <td className="py-3 text-right font-mono font-semibold text-primary">
-                          {calculateTotalBalance(denom)}
+                        <td className="py-3 text-right font-mono text-primary font-semibold">
+                          {formatNumber(calculateTotalBalance(denom))}
                         </td>
                       </tr>
                     ))}
@@ -325,19 +377,16 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
             </CardContent>
           </Card>
 
-          {/* Teller Buy/Sell Section */}
+          {/* Teller Section */}
           <Card className="border-primary/20 bg-card/50 backdrop-blur">
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle className="text-card-foreground">Teller Buy & Sell</CardTitle>
-                  <CardDescription>
-                    Record individual teller transactions - these automatically update totals above
-                  </CardDescription>
+                  <CardDescription>Each teller's figures automatically reflect in the totals.</CardDescription>
                 </div>
                 <Button onClick={addTeller} variant="outline" size="sm" className="gap-2 bg-transparent">
-                  <Plus className="h-4 w-4" />
-                  Add Teller
+                  <Plus className="h-4 w-4" /> Add Teller
                 </Button>
               </div>
             </CardHeader>
@@ -387,10 +436,10 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
                             <td className="py-2 text-right">
                               <Input
                                 type="number"
-                                className="h-8 w-20 text-right text-sm"
+                                className="h-8 w-24 text-right text-sm"
                                 value={teller.buy[denom] || ""}
                                 onChange={(e) =>
-                                  updateTellerBuy(teller.id, denom, Number.parseInt(e.target.value) || 0)
+                                  updateTellerBuy(teller.id, denom, Number.parseFloat(e.target.value) || 0)
                                 }
                                 placeholder="0"
                               />
@@ -398,10 +447,10 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
                             <td className="py-2 text-right">
                               <Input
                                 type="number"
-                                className="h-8 w-20 text-right text-sm"
+                                className="h-8 w-24 text-right text-sm"
                                 value={teller.sell[denom] || ""}
                                 onChange={(e) =>
-                                  updateTellerSell(teller.id, denom, Number.parseInt(e.target.value) || 0)
+                                  updateTellerSell(teller.id, denom, Number.parseFloat(e.target.value) || 0)
                                 }
                                 placeholder="0"
                               />
