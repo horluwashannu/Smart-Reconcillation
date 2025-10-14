@@ -3,216 +3,236 @@
 import { useState } from "react"
 import * as XLSX from "xlsx"
 import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, Send } from "lucide-react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
+import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { getSupabase } from "@/lib/supabase"
 
 interface CallOverRow {
+  id: number
   Date: string
   Narration: string
-  Amount: string
+  Amount: number
   Processor: string
   Authorizer: string
-  TicketRef: string
-  correct: boolean
-  exception: boolean
+  status: "Correct" | "Exception" | "Pending"
   reason?: string
-  status: "Regularized" | "Pending"
-  calloverOfficer: string
 }
 
-export function SmartCallOver() {
-  const [file, setFile] = useState<File | null>(null)
-  const [batchNo, setBatchNo] = useState("")
+export default function SmartCallOver() {
   const [rows, setRows] = useState<CallOverRow[]>([])
+  const [ticketRef, setTicketRef] = useState("")
   const [officer, setOfficer] = useState("")
+  const [loading, setLoading] = useState(false)
 
-  const handleFileUpload = async (file: File) => {
-    setFile(file)
+  // Parse Excel and load transactions
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
     try {
-      const buffer = await file.arrayBuffer()
-      const wb = XLSX.read(buffer, { type: "array" })
-      const sheet = wb.SheetNames[0]
-      const raw = XLSX.utils.sheet_to_json<any>(wb.Sheets[sheet], { defval: "" })
-      const parsed: CallOverRow[] = raw.map((r: any) => ({
-        Date: r.Date || r.DATE || "",
-        Narration: r.Narration || r.NARRATION || "",
-        Amount: r.Amount || r.AMOUNT || "",
-        Processor: r.Processor || r.PROCESSOR || "",
-        Authorizer: r.Authorizer || r.AUTHORIZER || "",
-        TicketRef: r.Ticket || r.Batch || "",
-        correct: true,
-        exception: false,
-        reason: "",
-        status: "Regularized",
-        calloverOfficer: officer || "",
+      const data = await file.arrayBuffer()
+      const workbook = XLSX.read(data)
+      const sheet = workbook.SheetNames[0]
+      const jsonData = XLSX.utils.sheet_to_json<any>(workbook.Sheets[sheet], { defval: "" })
+
+      const formatted = jsonData.map((item: any, index: number) => ({
+        id: index + 1,
+        Date: item.Date || item["Transaction Date"] || "-",
+        Narration: item.Narration || item.Description || "-",
+        Amount: Number(item.Amount || item["Transaction Amount"] || 0),
+        Processor: item.Processor || item.Inputter || "-",
+        Authorizer: item.Authorizer || item.Approver || "-",
+        status: "Pending" as "Pending",
       }))
-      setRows(parsed)
-    } catch (err) {
-      console.error("Error parsing call-over file:", err)
-      alert("❌ Failed to parse file. Ensure it has columns: Date, Narration, Amount, Processor, Authorizer, TicketRef.")
+
+      setRows(formatted)
+    } catch (error) {
+      console.error("Error parsing Excel:", error)
+      alert("Error reading Excel file. Please ensure it’s a valid transaction journal.")
     }
   }
 
-  const toggleException = (index: number) => {
-    const updated = [...rows]
-    updated[index].exception = !updated[index].exception
-    if (!updated[index].exception) updated[index].reason = ""
-    setRows(updated)
+  const toggleStatus = (id: number, newStatus: "Correct" | "Exception") => {
+    setRows((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, status: newStatus } : r))
+    )
   }
 
-  const updateReason = (index: number, value: string) => {
-    const updated = [...rows]
-    updated[index].reason = value
-    setRows(updated)
-  }
-
-  const updateStatus = (index: number, value: "Regularized" | "Pending") => {
-    const updated = [...rows]
-    updated[index].status = value
-    setRows(updated)
+  const updateReason = (id: number, value: string) => {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, reason: value } : r)))
   }
 
   const handleSubmit = async () => {
-    if (!batchNo) {
-      alert("Please enter a Batch/Ticket Reference before submitting.")
+    if (!ticketRef || !officer) {
+      alert("Please enter Ticket Reference and Call-Over Officer.")
+      return
+    }
+    if (rows.length === 0) {
+      alert("Please upload a transaction journal first.")
       return
     }
 
+    setLoading(true)
+    const supabase = getSupabase()
+
     try {
-      const supabase = getSupabase()
-      if (supabase) {
-        const { error } = await supabase.from("callover_reports").insert(
-          rows.map((r) => ({
-            date: r.Date,
-            narration: r.Narration,
-            amount: r.Amount,
-            processor: r.Processor,
-            authorizer: r.Authorizer,
-            ticket_ref: r.TicketRef || batchNo,
-            exception: r.exception,
-            reason: r.reason,
-            status: r.status,
-            callover_officer: officer,
-            submitted_at: new Date().toISOString(),
-          })),
-        )
-        if (error) throw error
-        alert("✅ Call-over report submitted successfully!")
-        setRows([])
-        setFile(null)
-        setBatchNo("")
-      } else {
-        localStorage.setItem("callover_temp", JSON.stringify(rows))
-        alert("Saved locally (Supabase not configured).")
-      }
-    } catch (err) {
-      console.error("Error saving call-over:", err)
-      alert("❌ Failed to submit call-over report")
+      if (!supabase) throw new Error("Supabase not configured")
+
+      const { error } = await supabase.from("callover_reports").insert({
+        ticket_ref: ticketRef,
+        officer,
+        records: rows,
+        created_at: new Date().toISOString(),
+      })
+
+      if (error) throw error
+
+      alert("✅ Call-Over Report submitted successfully!")
+      setRows([])
+      setTicketRef("")
+      setOfficer("")
+    } catch (error) {
+      console.error("Submission error:", error)
+      alert("Could not submit to server. Saving locally as backup.")
+
+      // fallback save
+      localStorage.setItem("callover_backup", JSON.stringify({ ticketRef, officer, rows }))
+    } finally {
+      setLoading(false)
     }
   }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-foreground">Smart Call-Over</h1>
-        <p className="text-muted-foreground">Upload transaction journal, review entries, and flag exceptions</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-foreground">Smart Call-Over</h1>
+          <p className="text-muted-foreground">
+            Upload transaction journals, review entries, and flag exceptions for review.
+          </p>
+        </div>
       </div>
 
-      {/* Batch + Officer */}
-      <Card>
+      <Card className="border-primary/20 bg-card/50 backdrop-blur">
         <CardHeader>
-          <CardTitle>Batch Info</CardTitle>
-          <CardDescription>Enter Batch/Ticket reference and call-over officer details</CardDescription>
+          <CardTitle>Upload Journal</CardTitle>
+          <CardDescription>Select your daily transaction Excel sheet to begin.</CardDescription>
         </CardHeader>
-        <CardContent className="flex gap-4">
-          <Input placeholder="Batch/Ticket No" value={batchNo} onChange={(e) => setBatchNo(e.target.value)} />
-          <Input placeholder="Call-over Officer" value={officer} onChange={(e) => setOfficer(e.target.value)} />
+        <CardContent className="flex items-center gap-3">
+          <Input type="file" accept=".xlsx,.xls" onChange={handleUpload} className="w-1/2" />
+          <Button variant="outline" className="gap-2">
+            <Upload className="h-4 w-4" /> Upload
+          </Button>
         </CardContent>
       </Card>
 
-      {/* Upload */}
-      <Card>
+      <Card className="border-primary/20 bg-card/50 backdrop-blur">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <FileSpreadsheet className="h-5 w-5 text-primary" />
-            Upload Transaction Journal
-          </CardTitle>
-          <CardDescription>Excel/CSV file with Date, Narration, Amount, Processor, Authorizer, TicketRef</CardDescription>
+          <CardTitle>Transaction Review</CardTitle>
+          <CardDescription>Flag mismatched or suspicious transactions before submitting.</CardDescription>
         </CardHeader>
-        <CardContent>
-          <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-6 hover:bg-muted">
-            <Upload className="mb-2 h-8 w-8 text-muted-foreground" />
-            <span>{file ? file.name : "Click or drag to upload"}</span>
-            <input type="file" className="hidden" accept=".xlsx,.xls,.csv" onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0])} />
-          </label>
-        </CardContent>
-      </Card>
-
-      {/* Table */}
-      {rows.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Review Transactions</CardTitle>
-            <CardDescription>Flag exceptions, add reasons, and set status before submission</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Narration</TableHead>
-                    <TableHead>Amount</TableHead>
-                    <TableHead>Processor</TableHead>
-                    <TableHead>Authorizer</TableHead>
-                    <TableHead>Ticket Ref</TableHead>
-                    <TableHead>Okay/Exception</TableHead>
-                    <TableHead>Reason</TableHead>
-                    <TableHead>Status</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {rows.map((row, idx) => (
-                    <TableRow key={idx}>
-                      <TableCell>{row.Date}</TableCell>
-                      <TableCell className="max-w-xs truncate">{row.Narration}</TableCell>
-                      <TableCell>{row.Amount}</TableCell>
-                      <TableCell>{row.Processor}</TableCell>
-                      <TableCell>{row.Authorizer}</TableCell>
-                      <TableCell>{row.TicketRef}</TableCell>
-                      <TableCell>
-                        <Button size="sm" variant={row.exception ? "destructive" : "default"} onClick={() => toggleException(idx)}>
-                          {row.exception ? <AlertCircle className="h-4 w-4" /> : <CheckCircle className="h-4 w-4" />}
-                          {row.exception ? "Exception" : "Correct"}
+        <CardContent className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Date</TableHead>
+                <TableHead>Narration</TableHead>
+                <TableHead>Amount</TableHead>
+                <TableHead>Processor</TableHead>
+                <TableHead>Authorizer</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Reason (if Exception)</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-center text-muted-foreground py-6">
+                    <FileSpreadsheet className="inline-block h-5 w-5 mr-2" />
+                    No transactions uploaded
+                  </TableCell>
+                </TableRow>
+              ) : (
+                rows.map((row) => (
+                  <TableRow key={row.id}>
+                    <TableCell className="font-mono text-sm">{row.Date}</TableCell>
+                    <TableCell className="max-w-xs truncate">{row.Narration}</TableCell>
+                    <TableCell className="font-mono text-right">
+                      ₦{row.Amount.toLocaleString()}
+                    </TableCell>
+                    <TableCell>{row.Processor}</TableCell>
+                    <TableCell>{row.Authorizer}</TableCell>
+                    <TableCell>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant={row.status === "Correct" ? "default" : "outline"}
+                          onClick={() => toggleStatus(row.id, "Correct")}
+                        >
+                          <CheckCircle className="h-4 w-4 mr-1" /> Correct
                         </Button>
-                      </TableCell>
-                      <TableCell>
-                        {row.exception && (
-                          <Input
-                            value={row.reason || ""}
-                            onChange={(e) => updateReason(idx, e.target.value)}
-                            placeholder="Reason"
-                          />
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <select value={row.status} onChange={(e) => updateStatus(idx, e.target.value as any)} className="rounded border p-1">
-                          <option value="Regularized">Regularized</option>
-                          <option value="Pending">Pending</option>
-                        </select>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                        <Button
+                          size="sm"
+                          variant={row.status === "Exception" ? "destructive" : "outline"}
+                          onClick={() => toggleStatus(row.id, "Exception")}
+                        >
+                          <AlertCircle className="h-4 w-4 mr-1" /> Exception
+                        </Button>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      {row.status === "Exception" && (
+                        <Textarea
+                          placeholder="Enter reason..."
+                          className="h-8 text-sm"
+                          value={row.reason || ""}
+                          onChange={(e) => updateReason(row.id, e.target.value)}
+                        />
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {rows.length > 0 && (
+        <Card className="border-primary/20 bg-card/50 backdrop-blur">
+          <CardHeader>
+            <CardTitle>Finalize & Submit</CardTitle>
+            <CardDescription>
+              Provide required info before sending to Admin or Operations Supervisor.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-1">Ticket Reference / Batch No</label>
+                <Input
+                  value={ticketRef}
+                  onChange={(e) => setTicketRef(e.target.value)}
+                  placeholder="e.g. TCK-2025-1001"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-1">Call-Over Officer</label>
+                <Input
+                  value={officer}
+                  onChange={(e) => setOfficer(e.target.value)}
+                  placeholder="Enter officer name"
+                />
+              </div>
             </div>
-            <div className="mt-6 flex justify-end">
-              <Button size="lg" className="gap-2" onClick={handleSubmit}>
-                <Send className="h-4 w-4" /> Submit Call-Over
+            <div className="flex justify-end">
+              <Button onClick={handleSubmit} disabled={loading} className="gap-2">
+                <Send className={`h-4 w-4 ${loading ? "animate-pulse" : ""}`} />
+                {loading ? "Submitting..." : "Submit Report"}
               </Button>
             </div>
           </CardContent>
