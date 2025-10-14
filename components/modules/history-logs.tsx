@@ -1,243 +1,187 @@
-"use client"
+// App.tsx
+import React, { useState, useEffect } from "react";
+import * as XLSX from "xlsx";
+import Fuse from "fuse.js";
 
-import React, { useState } from "react"
-import * as XLSX from "xlsx"
-import { Upload, CheckCircle, AlertCircle, Send, FileSpreadsheet } from "lucide-react"
-
-/* -------------------- UI Components -------------------- */
-const Card = ({ title, children }: { title?: string; children: React.ReactNode }) => (
-  <div className="border border-gray-200 rounded-lg p-4 bg-white shadow-sm">
-    {title && <h2 className="font-semibold text-lg mb-2">{title}</h2>}
-    {children}
-  </div>
-)
-
-const Button = ({
-  onClick,
-  children,
-  variant,
-  disabled,
-}: {
-  onClick?: () => void
-  children: React.ReactNode
-  variant?: "primary" | "danger" | "outline"
-  disabled?: boolean
-}) => {
-  const base =
-    "px-3 py-1.5 text-sm rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-  const styles =
-    variant === "danger"
-      ? "bg-red-500 text-white hover:bg-red-600"
-      : variant === "outline"
-      ? "border border-gray-300 text-gray-700 hover:bg-gray-50"
-      : "bg-blue-600 text-white hover:bg-blue-700"
-  return (
-    <button onClick={onClick} disabled={disabled} className={`${base} ${styles}`}>
-      {children}
-    </button>
-  )
+interface Transaction {
+  Date: string;
+  Narration: string;
+  Account: string;
+  Amount: number;
+  Type: "Debit" | "Credit";
+  RefNo: string;
+  Status?: string; // Matched, Mismatch, Pending, Duplicate
+  Remarks?: string;
 }
 
-const Table = ({ children }: { children: React.ReactNode }) => (
-  <table className="w-full text-sm border border-gray-200">{children}</table>
-)
+const App: React.FC = () => {
+  const [tickets, setTickets] = useState<Transaction[]>([]);
+  const [gls, setGLs] = useState<Transaction[]>([]);
+  const [comparisonResults, setComparisonResults] = useState<Transaction[]>([]);
 
-/* -------------------- Main Component -------------------- */
-interface CallOverRow {
-  id: number
-  Date: string
-  Narration: string
-  Amount: number
-  Processor: string
-  Authorizer: string
-  status: "Correct" | "Exception" | "Pending"
-  reason?: string
-}
+  // Load previous comparison if exists
+  useEffect(() => {
+    const stored = localStorage.getItem("comparisonResults");
+    if (stored) setComparisonResults(JSON.parse(stored));
+  }, []);
 
-export default function CallOverPage() {
-  const [rows, setRows] = useState<CallOverRow[]>([])
-  const [ticketRef, setTicketRef] = useState("")
-  const [officer, setOfficer] = useState("")
-  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    localStorage.setItem("comparisonResults", JSON.stringify(comparisonResults));
+  }, [comparisonResults]);
 
-  /* ---------- Upload Excel ---------- */
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: "ticket" | "gl") => {
+    const file = e.target.files?.[0];
+    if (!file) return;
 
-    try {
-      const buf = await file.arrayBuffer()
-      const workbook = XLSX.read(buf)
-      const sheet = workbook.SheetNames[0]
-      const data = XLSX.utils.sheet_to_json<any>(workbook.Sheets[sheet], { defval: "" })
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const data = evt.target?.result;
+      if (!data) return;
 
-      const formatted = data.map((r: any, i: number) => ({
-        id: i + 1,
-        Date: r.Date || r["Transaction Date"] || "-",
-        Narration: r.Narration || r.Description || "-",
-        Amount: Number(r.Amount || r["Transaction Amount"] || 0),
-        Processor: r.Processor || r.Inputter || "-",
-        Authorizer: r.Authorizer || r.Approver || "-",
-        status: "Pending" as const,
-      }))
+      const workbook = XLSX.read(data, { type: "binary" });
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const jsonData: any[] = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+      const headers = jsonData[0] as string[];
 
-      setRows(formatted)
-      setError(null)
-    } catch (err) {
-      console.error(err)
-      setError("❌ Invalid Excel file. Please upload a valid .xlsx journal.")
-    }
-  }
+      const idxMap: Record<string, number> = {
+        Date: headers.indexOf("Date"),
+        Narration: headers.indexOf("Narration"),
+        Account: headers.indexOf("Account"),
+        Amount: headers.indexOf("Amount"),
+        Type: headers.indexOf("Type"),
+        RefNo: headers.indexOf("Ref No"),
+      };
 
-  /* ---------- Row Actions ---------- */
-  const toggleStatus = (id: number, status: "Correct" | "Exception") => {
-    setRows(prev => prev.map(r => (r.id === id ? { ...r, status } : r)))
-  }
+      const transactions: Transaction[] = jsonData.slice(1).map((row: any) => ({
+        Date: row[idxMap.Date],
+        Narration: row[idxMap.Narration],
+        Account: row[idxMap.Account],
+        Amount: Number(row[idxMap.Amount]),
+        Type: row[idxMap.Type],
+        RefNo: row[idxMap.RefNo],
+      }));
 
-  const updateReason = (id: number, reason: string) => {
-    setRows(prev => prev.map(r => (r.id === id ? { ...r, reason } : r)))
-  }
+      if (type === "ticket") setTickets(transactions);
+      else setGLs(transactions);
+    };
+    reader.readAsBinaryString(file);
+  };
 
-  /* ---------- Save to Local Storage ---------- */
-  const handleSubmit = () => {
-    if (!ticketRef || !officer) {
-      alert("Please fill in Ticket Reference and Officer Name.")
-      return
-    }
+  const runComparison = () => {
+    const results: Transaction[] = [];
 
-    const report = {
-      ticketRef,
-      officer,
-      date: new Date().toISOString(),
-      data: rows,
-    }
+    const fuse = new Fuse(gls, {
+      keys: ["Narration"],
+      threshold: 0.4, // Adjust for fuzzy matching
+    });
 
-    localStorage.setItem("calloverReport", JSON.stringify(report))
-    alert("✅ Call-Over report saved locally.")
+    tickets.forEach((ticket) => {
+      const glMatch = fuse.search(ticket.Narration);
+      if (glMatch.length > 0) {
+        const gl = glMatch[0].item;
+        if (gl.Amount === ticket.Amount && gl.Date === ticket.Date) {
+          results.push({ ...ticket, Status: "Matched", Remarks: "" });
+        } else {
+          results.push({ ...ticket, Status: "Mismatch", Remarks: `GL: ${gl.Date} ${gl.Amount}` });
+        }
+      } else {
+        results.push({ ...ticket, Status: "Pending Post", Remarks: "Not found in GL" });
+      }
+    });
 
-    // Clear form
-    setRows([])
-    setTicketRef("")
-    setOfficer("")
-  }
+    // Check for duplicates in GL
+    gls.forEach((gl) => {
+      const count = gls.filter((x) => x.Amount === gl.Amount && x.RefNo === gl.RefNo).length;
+      if (count > 1) {
+        results.push({ ...gl, Status: "Duplicate", Remarks: "Duplicate in GL" });
+      }
+    });
 
-  /* ---------- Export to Excel ---------- */
-  const handleExport = () => {
-    if (rows.length === 0) {
-      alert("No data to export!")
-      return
-    }
+    setComparisonResults(results);
+  };
 
-    const ws = XLSX.utils.json_to_sheet(
-      rows.map(r => ({
-        Date: r.Date,
-        Narration: r.Narration,
-        Amount: r.Amount,
-        Processor: r.Processor,
-        Authorizer: r.Authorizer,
-        Status: r.status,
-        Reason: r.reason || "",
-      }))
-    )
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, "CallOver")
-    XLSX.writeFile(wb, `callover_${new Date().toISOString()}.xlsx`)
-  }
+  const exportExcel = () => {
+    const ws = XLSX.utils.json_to_sheet(comparisonResults);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "CallOver");
+    XLSX.writeFile(wb, `CallOver_Exceptions_${new Date().toISOString().slice(0,10)}.xlsx`);
+  };
+
+  const summary = comparisonResults.reduce(
+    (acc, curr) => {
+      if (curr.Status === "Matched") acc.Matched += 1;
+      else if (curr.Status === "Mismatch") acc.Mismatched += 1;
+      else if (curr.Status === "Pending Post") acc.Missing += 1;
+      else if (curr.Status === "Duplicate") acc.Duplicates += 1;
+      return acc;
+    },
+    { Matched: 0, Mismatched: 0, Missing: 0, Duplicates: 0 }
+  );
 
   return (
-    <div className="p-6 space-y-6">
-      <h1 className="text-2xl font-bold text-gray-900">Smart Call-Over</h1>
-      <p className="text-gray-600">
-        Upload the daily transaction journal, verify records, mark exceptions, and submit your findings.
-      </p>
+    <div style={{ maxWidth: 1000, margin: "50px auto", fontFamily: "Arial, sans-serif" }}>
+      <h1>Call-Over Reconciliation</h1>
 
-      {error && (
-        <div className="bg-red-100 border border-red-300 text-red-700 px-4 py-2 rounded">{error}</div>
-      )}
+      <div style={{ marginBottom: 20 }}>
+        <input type="file" accept=".xlsx,.xls" onChange={(e) => handleFileUpload(e, "ticket")} />
+        <span style={{ marginLeft: 10 }}>Upload Tickets Register</span>
+      </div>
 
-      {/* Upload */}
-      <Card title="Upload Journal">
-        <div className="flex items-center gap-3">
-          <Upload className="h-5 w-5 text-gray-500" />
-          <input
-            type="file"
-            accept=".xlsx,.xls"
-            onChange={handleUpload}
-            className="text-sm border border-gray-300 p-2 rounded"
-          />
-        </div>
-      </Card>
+      <div style={{ marginBottom: 20 }}>
+        <input type="file" accept=".xlsx,.xls" onChange={(e) => handleFileUpload(e, "gl")} />
+        <span style={{ marginLeft: 10 }}>Upload GL Statement</span>
+      </div>
 
-      {/* Table */}
-      {rows.length > 0 && (
-        <Card title="Transaction Review">
-          <div className="overflow-x-auto">
-            <Table>
-              <thead className="bg-gray-100">
-                <tr>
-                  <th className="p-2 text-left">Date</th>
-                  <th className="p-2 text-left">Narration</th>
-                  <th className="p-2 text-right">Amount</th>
-                  <th className="p-2 text-left">Processor</th>
-                  <th className="p-2 text-left">Authorizer</th>
-                  <th className="p-2 text-center">Status</th>
-                  <th className="p-2 text-left">Exception Reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map(r => (
-                  <tr key={r.id} className="border-t border-gray-200">
-                    <td className="p-2">{r.Date}</td>
-                    <td className="p-2 max-w-xs truncate">{r.Narration}</td>
-                    <td className="p-2 text-right">₦{r.Amount.toLocaleString()}</td>
-                    <td className="p-2">{r.Processor}</td>
-                    <td className="p-2">{r.Authorizer}</td>
-                    <td className="p-2 text-center space-x-2">
-                      <Button
-                        onClick={() => toggleStatus(r.id, "Correct")}
-                        variant={r.status === "Correct" ? "primary" : "outline"}
-                      >
-                        <CheckCircle className="inline-block h-4 w-4 mr-1" />
-                        Correct
-                      </Button>
-                      <Button
-                        onClick={() => toggleStatus(r.id, "Exception")}
-                        variant={r.status === "Exception" ? "danger" : "outline"}
-                      >
-                        <AlertCircle className="inline-block h-4 w-4 mr-1" />
-                        Exception
-                      </Button>
-                    </td>
-                    <td className="p-2">
-                      {r.status === "Exception" && (
-                        <textarea
-                          value={r.reason || ""}
-                          onChange={e => updateReason(r.id, e.target.value)}
-                          className="w-full border border-gray-300 rounded p-1 text-sm"
-                          placeholder="Enter reason"
-                        />
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          </div>
-        </Card>
-      )}
+      <div style={{ marginBottom: 20 }}>
+        <button onClick={runComparison}>Run Comparison</button>
+        <button onClick={exportExcel} style={{ marginLeft: 10 }}>Export Exceptions</button>
+      </div>
 
-      {/* Submit + Export */}
-      {rows.length > 0 && (
-        <Card title="Finalize & Submit">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm font-medium text-gray-700">Ticket Reference</label>
-              <input
-                value={ticketRef}
-                onChange={e => setTicketRef(e.target.value)}
-                className="mt-1 border border-gray-300 rounded p-2 w-full"
-                placeholder="e.g. TCK-2025-1003"
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium text-gray-700
+      <h2>Summary</h2>
+      <ul>
+        <li>Total Tickets: {tickets.length}</li>
+        <li>Matched: {summary.Matched}</li>
+        <li>Mismatched: {summary.Mismatched}</li>
+        <li>Missing in GL: {summary.Missing}</li>
+        <li>Duplicates: {summary.Duplicates}</li>
+      </ul>
+
+      <h2>Detailed Results</h2>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={{ border: "1px solid black", padding: 8 }}>Date</th>
+            <th style={{ border: "1px solid black", padding: 8 }}>Narration</th>
+            <th style={{ border: "1px solid black", padding: 8 }}>Account</th>
+            <th style={{ border: "1px solid black", padding: 8 }}>Amount</th>
+            <th style={{ border: "1px solid black", padding: 8 }}>Type</th>
+            <th style={{ border: "1px solid black", padding: 8 }}>Ref No</th>
+            <th style={{ border: "1px solid black", padding: 8 }}>Status</th>
+            <th style={{ border: "1px solid black", padding: 8 }}>Remarks</th>
+          </tr>
+        </thead>
+        <tbody>
+          {comparisonResults.map((res, idx) => (
+            <tr key={idx} style={{ backgroundColor: res.Status === "Matched" ? "#c8e6c9" :
+              res.Status === "Mismatch" ? "#ffecb3" :
+              res.Status === "Pending Post" ? "#ffcdd2" :
+              res.Status === "Duplicate" ? "#f8bbd0" : "white"
+            }}>
+              <td style={{ border: "1px solid black", padding: 8 }}>{res.Date}</td>
+              <td style={{ border: "1px solid black", padding: 8 }}>{res.Narration}</td>
+              <td style={{ border: "1px solid black", padding: 8 }}>{res.Account}</td>
+              <td style={{ border: "1px solid black", padding: 8 }}>{res.Amount}</td>
+              <td style={{ border: "1px solid black", padding: 8 }}>{res.Type}</td>
+              <td style={{ border: "1px solid black", padding: 8 }}>{res.RefNo}</td>
+              <td style={{ border: "1px solid black", padding: 8 }}>{res.Status}</td>
+              <td style={{ border: "1px solid black", padding: 8 }}>{res.Remarks}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+export default App;
