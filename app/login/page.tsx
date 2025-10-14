@@ -43,3 +43,58 @@ export default function LoginPage() {
 
         <form onSubmit={handleLogin} className="space-y-6">
           <div className="space-y-2">
+            <label htmlFor="email" className="text-gray-200 text-sm font-medium">
+              Email Address
+            </label>
+            <div className="relative">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+              <input
+                id="email"
+                type="email"
+                placeholder="you@example.com"
+                className="w-full pl-10 pr-3 py-2 rounded-lg bg-white/10 border border-white/20 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition"
+                required
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label htmlFor="password" className="text-gray-200 text-sm font-medium">
+              Password
+            </label>
+            <div className="relative">
+              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+              <input
+                id="password"
+                type="password"
+                placeholder="••••••••"
+                className="w-full pl-10 pr-3 py-2 rounded-lg bg-white/10 border border-white/20 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition"
+                required
+              />
+            </div>
+          </div>
+
+          <motion.button
+            whileTap={{ scale: 0.96 }}
+            type="submit"
+            disabled={loading}
+            className="w-full flex justify-center items-center py-2.5 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 rounded-lg shadow-lg shadow-indigo-900/30 font-semibold tracking-wide transition-all duration-300"
+          >
+            {loading ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                Logging in...
+              </>
+            ) : (
+              "Login"
+            )}
+          </motion.button>
+        </form>
+
+        <p className="text-center text-xs text-gray-400 mt-8">
+          © {new Date().getFullYear()} Smart Reconciliation. All Rights Reserved.
+        </p>
+      </motion.div>
+    </div>
+  );
+}
