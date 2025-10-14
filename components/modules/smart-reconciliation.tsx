@@ -86,27 +86,35 @@ export function SmartReconciliation({ userId }: SmartReconciliationProps) {
   }
 
   const normalizeRow = (raw: any): TransactionRow => {
-    const date = getField(raw, ["Date", "DATE", "date"]) || ""
-    const narration = getField(raw, ["Narration", "NARRATION", "narration", "Narrative"]) || ""
-    const amountRaw = getField(raw, ["Amount", "AMOUNT", "amount", "Amount (NGN)"]) || ""
-    const parsed = parseExcelAmount(amountRaw)
-    const cleanNarration = String(narration).replace(/\s+/g, " ").trim()
-    const first15 = cleanNarration.substring(0, 15).toUpperCase().trim()
-    const last15 = cleanNarration.slice(-15).toUpperCase().trim()
-    const helper1 = `${first15}_${parsed.value}`
-    const helper2 = `${last15}_${parsed.value}`
-    return {
-      Date: date,
-      Narration: narration,
-      OriginalAmount: parsed.original,
-      SignedAmount: parsed.value,
-      IsNegative: parsed.isNegative,
-      First15: first15,
-      Last15: last15,
-      HelperKey1: helper1,
-      HelperKey2: helper2,
-    }
+  const date = getField(raw, ["Date", "DATE", "date"]) || ""
+  const narration = getField(raw, ["Narration", "NARRATION", "narration", "Narrative"]) || ""
+  const amountRaw = getField(raw, ["Amount", "AMOUNT", "amount", "Amount (NGN)"]) || ""
+  const parsed = parseExcelAmount(amountRaw)
+
+  // Clean and normalize narration
+  const cleanNarration = String(narration).replace(/\s+/g, " ").trim()
+  const first15 = cleanNarration.substring(0, 15).toUpperCase().trim()
+  const last15 = cleanNarration.slice(-15).toUpperCase().trim()
+
+  // 🟢 FIXED: use absolute value for helper keys (ignore negative signs)
+  const absAmount = Math.abs(parsed.value)
+
+  // Construct helper keys without negative sign in amount
+  const helper1 = `${first15}_${absAmount}`
+  const helper2 = `${last15}_${absAmount}`
+
+  return {
+    Date: date,
+    Narration: narration,
+    OriginalAmount: parsed.original,
+    SignedAmount: parsed.value,
+    IsNegative: parsed.isNegative,
+    First15: first15,
+    Last15: last15,
+    HelperKey1: helper1,
+    HelperKey2: helper2,
   }
+}
 
   const handleFileUpload = async (file: File, fileType: "previous" | "current") => {
     console.log(`[v0] Uploading ${fileType} file:`, file.name)
