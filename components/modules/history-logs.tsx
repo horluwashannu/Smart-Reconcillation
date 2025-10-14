@@ -1,140 +1,223 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { History, Search, RefreshCw } from "lucide-react"
+import { useState } from "react"
+import * as XLSX from "xlsx"
+import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, Send } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import { getSupabase } from "@/lib/supabase"
 
-interface HistoryLog {
-  id: string
-  timestamp: string
-  user: string
-  action: string
-  status: string
-  details?: string
+interface CallOverRow {
+  Date: string
+  Narration: string
+  Amount: string
+  Processor: string
+  Authorizer: string
+  TicketRef: string
+  correct: boolean
+  exception: boolean
+  reason?: string
+  status: "Regularized" | "Pending"
+  calloverOfficer: string
 }
 
-export function HistoryLogs() {
-  const [logs, setLogs] = useState<HistoryLog[]>([])
-  const [searchTerm, setSearchTerm] = useState("")
-  const [loading, setLoading] = useState(false)
+export function SmartCallOver() {
+  const [file, setFile] = useState<File | null>(null)
+  const [batchNo, setBatchNo] = useState("")
+  const [rows, setRows] = useState<CallOverRow[]>([])
+  const [officer, setOfficer] = useState("")
 
-  const fetchHistoryLogs = async () => {
-    setLoading(true)
+  const handleFileUpload = async (file: File) => {
+    setFile(file)
     try {
-      const supabase = getSupabase()
-      if (supabase) {
-        const { data, error } = await supabase
-          .from("history_logs")
-          .select("*")
-          .order("timestamp", { ascending: false })
-          .limit(100)
-
-        if (data && !error) {
-          setLogs(data)
-        }
-      } else {
-        // Fallback to localStorage if Supabase not configured
-        const storedLogs = localStorage.getItem("historyLogs")
-        if (storedLogs) {
-          setLogs(JSON.parse(storedLogs))
-        }
-      }
-    } catch (error) {
-      console.error("Error fetching history logs:", error)
-    } finally {
-      setLoading(false)
+      const buffer = await file.arrayBuffer()
+      const wb = XLSX.read(buffer, { type: "array" })
+      const sheet = wb.SheetNames[0]
+      const raw = XLSX.utils.sheet_to_json<any>(wb.Sheets[sheet], { defval: "" })
+      const parsed: CallOverRow[] = raw.map((r: any) => ({
+        Date: r.Date || r.DATE || "",
+        Narration: r.Narration || r.NARRATION || "",
+        Amount: r.Amount || r.AMOUNT || "",
+        Processor: r.Processor || r.PROCESSOR || "",
+        Authorizer: r.Authorizer || r.AUTHORIZER || "",
+        TicketRef: r.Ticket || r.Batch || "",
+        correct: true,
+        exception: false,
+        reason: "",
+        status: "Regularized",
+        calloverOfficer: officer || "",
+      }))
+      setRows(parsed)
+    } catch (err) {
+      console.error("Error parsing call-over file:", err)
+      alert("❌ Failed to parse file. Ensure it has columns: Date, Narration, Amount, Processor, Authorizer, TicketRef.")
     }
   }
 
-  useEffect(() => {
-    fetchHistoryLogs()
-  }, [])
+  const toggleException = (index: number) => {
+    const updated = [...rows]
+    updated[index].exception = !updated[index].exception
+    if (!updated[index].exception) updated[index].reason = ""
+    setRows(updated)
+  }
 
-  const filteredLogs = logs.filter(
-    (log) =>
-      log.action.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      log.user.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      log.details?.toLowerCase().includes(searchTerm.toLowerCase()),
-  )
+  const updateReason = (index: number, value: string) => {
+    const updated = [...rows]
+    updated[index].reason = value
+    setRows(updated)
+  }
+
+  const updateStatus = (index: number, value: "Regularized" | "Pending") => {
+    const updated = [...rows]
+    updated[index].status = value
+    setRows(updated)
+  }
+
+  const handleSubmit = async () => {
+    if (!batchNo) {
+      alert("Please enter a Batch/Ticket Reference before submitting.")
+      return
+    }
+
+    try {
+      const supabase = getSupabase()
+      if (supabase) {
+        const { error } = await supabase.from("callover_reports").insert(
+          rows.map((r) => ({
+            date: r.Date,
+            narration: r.Narration,
+            amount: r.Amount,
+            processor: r.Processor,
+            authorizer: r.Authorizer,
+            ticket_ref: r.TicketRef || batchNo,
+            exception: r.exception,
+            reason: r.reason,
+            status: r.status,
+            callover_officer: officer,
+            submitted_at: new Date().toISOString(),
+          })),
+        )
+        if (error) throw error
+        alert("✅ Call-over report submitted successfully!")
+        setRows([])
+        setFile(null)
+        setBatchNo("")
+      } else {
+        localStorage.setItem("callover_temp", JSON.stringify(rows))
+        alert("Saved locally (Supabase not configured).")
+      }
+    } catch (err) {
+      console.error("Error saving call-over:", err)
+      alert("❌ Failed to submit call-over report")
+    }
+  }
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-foreground">History Logs</h1>
-          <p className="text-muted-foreground">View system activity and audit trail from database</p>
-        </div>
-        <Button onClick={fetchHistoryLogs} variant="outline" className="gap-2 bg-transparent" disabled={loading}>
-          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          Refresh
-        </Button>
+      <div>
+        <h1 className="text-3xl font-bold text-foreground">Smart Call-Over</h1>
+        <p className="text-muted-foreground">Upload transaction journal, review entries, and flag exceptions</p>
       </div>
 
+      {/* Batch + Officer */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <History className="h-5 w-5 text-primary" />
-                Activity Log
-              </CardTitle>
-              <CardDescription>Recent system activities and user actions</CardDescription>
-            </div>
-            <div className="relative w-64">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="Search logs..."
-                className="pl-9"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
-          </div>
+          <CardTitle>Batch Info</CardTitle>
+          <CardDescription>Enter Batch/Ticket reference and call-over officer details</CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="rounded-lg border border-border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Log ID</TableHead>
-                  <TableHead>Timestamp</TableHead>
-                  <TableHead>User</TableHead>
-                  <TableHead>Action</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Details</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredLogs.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground">
-                      {loading ? "Loading logs..." : "No logs found"}
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  filteredLogs.map((log) => (
-                    <TableRow key={log.id}>
-                      <TableCell className="font-medium">{log.id}</TableCell>
-                      <TableCell className="font-mono text-sm">{log.timestamp}</TableCell>
-                      <TableCell>{log.user}</TableCell>
-                      <TableCell>{log.action}</TableCell>
-                      <TableCell>
-                        <Badge variant={log.status === "Success" ? "default" : "destructive"}>{log.status}</Badge>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">{log.details || "-"}</TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </div>
+        <CardContent className="flex gap-4">
+          <Input placeholder="Batch/Ticket No" value={batchNo} onChange={(e) => setBatchNo(e.target.value)} />
+          <Input placeholder="Call-over Officer" value={officer} onChange={(e) => setOfficer(e.target.value)} />
         </CardContent>
       </Card>
+
+      {/* Upload */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <FileSpreadsheet className="h-5 w-5 text-primary" />
+            Upload Transaction Journal
+          </CardTitle>
+          <CardDescription>Excel/CSV file with Date, Narration, Amount, Processor, Authorizer, TicketRef</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-6 hover:bg-muted">
+            <Upload className="mb-2 h-8 w-8 text-muted-foreground" />
+            <span>{file ? file.name : "Click or drag to upload"}</span>
+            <input type="file" className="hidden" accept=".xlsx,.xls,.csv" onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0])} />
+          </label>
+        </CardContent>
+      </Card>
+
+      {/* Table */}
+      {rows.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Review Transactions</CardTitle>
+            <CardDescription>Flag exceptions, add reasons, and set status before submission</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Narration</TableHead>
+                    <TableHead>Amount</TableHead>
+                    <TableHead>Processor</TableHead>
+                    <TableHead>Authorizer</TableHead>
+                    <TableHead>Ticket Ref</TableHead>
+                    <TableHead>Correct/Exception</TableHead>
+                    <TableHead>Reason</TableHead>
+                    <TableHead>Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rows.map((row, idx) => (
+                    <TableRow key={idx}>
+                      <TableCell>{row.Date}</TableCell>
+                      <TableCell className="max-w-xs truncate">{row.Narration}</TableCell>
+                      <TableCell>{row.Amount}</TableCell>
+                      <TableCell>{row.Processor}</TableCell>
+                      <TableCell>{row.Authorizer}</TableCell>
+                      <TableCell>{row.TicketRef}</TableCell>
+                      <TableCell>
+                        <Button size="sm" variant={row.exception ? "destructive" : "default"} onClick={() => toggleException(idx)}>
+                          {row.exception ? <AlertCircle className="h-4 w-4" /> : <CheckCircle className="h-4 w-4" />}
+                          {row.exception ? "Exception" : "Correct"}
+                        </Button>
+                      </TableCell>
+                      <TableCell>
+                        {row.exception && (
+                          <Input
+                            value={row.reason || ""}
+                            onChange={(e) => updateReason(idx, e.target.value)}
+                            placeholder="Reason"
+                          />
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <select value={row.status} onChange={(e) => updateStatus(idx, e.target.value as any)} className="rounded border p-1">
+                          <option value="Regularized">Regularized</option>
+                          <option value="Pending">Pending</option>
+                        </select>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            <div className="mt-6 flex justify-end">
+              <Button size="lg" className="gap-2" onClick={handleSubmit}>
+                <Send className="h-4 w-4" /> Submit Call-Over
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }
