@@ -562,22 +562,28 @@ function PreviewTable({ data }: { data: TransactionRow[] }) {
         <TableBody>
           {data.map((row, index) => (
             <TableRow key={index}>
-              <TableCell className="font-medium text-foreground">{row.Date}</TableCell>
-              <TableCell className="max-w-xs text-foreground">{row.Narration}</TableCell>
-              <TableCell className="text-foreground">{row.OriginalAmount}</TableCell>
-              <TableCell
-                className={`text-right font-mono ${row.SignedAmount === 0 ? "text-red-500" : "text-foreground"}`}
-              >
+               <TableCell className="font-medium text-foreground">{row.Date}</TableCell>
+                <TableCell className="max-w-[240px] truncate text-foreground" title={row.Narration}>
+                    {row.Narration}
+                </TableCell>
+                <TableCell className="text-foreground">{row.OriginalAmount}</TableCell>
+           <TableCell
+               className={`text-right font-mono ${
+               row.SignedAmount === 0 ? "text-red-500" : "text-foreground"
+               }`}
+                >
                 {row.SignedAmount.toLocaleString()}
-              </TableCell>
-              <TableCell className="text-center">
-                <Badge variant={row.IsNegative ? "destructive" : "secondary"}>{row.IsNegative ? "Yes" : "No"}</Badge>
-              </TableCell>
-              <TableCell className="text-xs text-muted-foreground">{row.First15}</TableCell>
-              <TableCell className="text-xs text-muted-foreground">{row.Last15}</TableCell>
-              <TableCell className="text-xs font-mono text-muted-foreground">{row.HelperKey1}</TableCell>
-              <TableCell className="text-xs font-mono text-muted-foreground">{row.HelperKey2}</TableCell>
-            </TableRow>
+             </TableCell>
+               <TableCell className="text-center">
+            <Badge variant={row.IsNegative ? "destructive" : "secondary"}>
+             {row.IsNegative ? "Yes" : "No"}
+           </Badge>
+          </TableCell>
+          <TableCell className="text-xs text-muted-foreground">{row.First15}</TableCell>
+          <TableCell className="text-xs text-muted-foreground">{row.Last15}</TableCell>
+          <TableCell className="text-xs font-mono text-muted-foreground">{row.HelperKey1}</TableCell>
+            <TableCell className="text-xs font-mono text-muted-foreground">{row.HelperKey2}</TableCell>
+              </TableRow>
           ))}
         </TableBody>
       </Table>
@@ -644,19 +650,21 @@ function SelectableTable({
             const globalIndex = allData.indexOf(row)
             return (
               <TableRow key={index}>
-                <TableCell>
-                  <Checkbox checked={selectedRows.has(globalIndex)} onCheckedChange={() => toggleRow(globalIndex)} />
-                </TableCell>
-                <TableCell className="font-medium text-foreground">{row.Date}</TableCell>
-                <TableCell className="max-w-xs text-foreground">{row.Narration}</TableCell>
+               <TableCell>
+                 <Checkbox checked={selectedRows.has(globalIndex)} onCheckedChange={() => toggleRow(globalIndex)} />
+                  </TableCell>
+                  <TableCell className="font-medium text-foreground">{row.Date}</TableCell>
+                <TableCell className="max-w-[240px] truncate text-foreground" title={row.Narration}>
+               {row.Narration}
+          </TableCell>
                 <TableCell className="text-right font-mono text-foreground">
-                  ₦{Math.abs(row.SignedAmount).toLocaleString()}
+                 ₦{Math.abs(row.SignedAmount).toLocaleString()}
                 </TableCell>
-                <TableCell className="text-xs font-mono text-muted-foreground">{row.HelperKey1}</TableCell>
-                <TableCell className="text-xs font-mono text-muted-foreground">{row.HelperKey2}</TableCell>
-                <TableCell>
-                  <Badge variant="secondary">{row.status}</Badge>
-                </TableCell>
+              <TableCell className="text-xs font-mono text-muted-foreground">{row.HelperKey1}</TableCell>
+            <TableCell className="text-xs font-mono text-muted-foreground">{row.HelperKey2}</TableCell>
+            <TableCell>
+             <Badge variant="secondary">{row.status}</Badge>
+              </TableCell>
               </TableRow>
             )
           })}
