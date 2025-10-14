@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import React, { useState } from "react"
 import * as XLSX from "xlsx"
 import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, Send } from "lucide-react"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
@@ -9,7 +9,15 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { getSupabase } from "@/lib/supabase"
+
+// Optional import guard for Supabase (prevents crash if lib missing)
+let getSupabase: any = () => null
+try {
+  // Dynamically import only if available (avoids build error)
+  getSupabase = require("@/lib/supabase").getSupabase
+} catch (e) {
+  console.warn("Supabase not configured — using local fallback only.")
+}
 
 interface CallOverRow {
   id: number
@@ -27,100 +35,105 @@ export default function SmartCallOver() {
   const [ticketRef, setTicketRef] = useState("")
   const [officer, setOfficer] = useState("")
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  // Parse Excel and load transactions
+  // Upload Excel File
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
 
-    try {
-      const data = await file.arrayBuffer()
-      const workbook = XLSX.read(data)
-      const sheet = workbook.SheetNames[0]
-      const jsonData = XLSX.utils.sheet_to_json<any>(workbook.Sheets[sheet], { defval: "" })
+    setError(null)
 
-      const formatted = jsonData.map((item: any, index: number) => ({
-        id: index + 1,
-        Date: item.Date || item["Transaction Date"] || "-",
-        Narration: item.Narration || item.Description || "-",
-        Amount: Number(item.Amount || item["Transaction Amount"] || 0),
-        Processor: item.Processor || item.Inputter || "-",
-        Authorizer: item.Authorizer || item.Approver || "-",
-        status: "Pending" as "Pending",
+    try {
+      const buffer = await file.arrayBuffer()
+      const workbook = XLSX.read(buffer)
+      const firstSheet = workbook.SheetNames[0]
+      const data = XLSX.utils.sheet_to_json<any>(workbook.Sheets[firstSheet], { defval: "" })
+
+      const formatted = data.map((r: any, i: number) => ({
+        id: i + 1,
+        Date: r.Date || r["Transaction Date"] || "-",
+        Narration: r.Narration || r.Description || "-",
+        Amount: Number(r.Amount || r["Transaction Amount"] || 0),
+        Processor: r.Processor || r.Inputter || "-",
+        Authorizer: r.Authorizer || r.Approver || "-",
+        status: "Pending" as const,
       }))
 
       setRows(formatted)
-    } catch (error) {
-      console.error("Error parsing Excel:", error)
-      alert("Error reading Excel file. Please ensure it’s a valid transaction journal.")
+    } catch (err) {
+      console.error("Excel parse error:", err)
+      setError("Failed to read Excel file. Please use a valid .xlsx sheet.")
     }
   }
 
   const toggleStatus = (id: number, newStatus: "Correct" | "Exception") => {
-    setRows((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, status: newStatus } : r))
-    )
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, status: newStatus } : r)))
   }
 
-  const updateReason = (id: number, value: string) => {
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, reason: value } : r)))
+  const updateReason = (id: number, reason: string) => {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, reason } : r)))
   }
 
   const handleSubmit = async () => {
     if (!ticketRef || !officer) {
-      alert("Please enter Ticket Reference and Call-Over Officer.")
+      alert("Please fill in Ticket Reference and Officer Name.")
       return
     }
+
     if (rows.length === 0) {
       alert("Please upload a transaction journal first.")
       return
     }
 
     setLoading(true)
-    const supabase = getSupabase()
+    setError(null)
 
     try {
-      if (!supabase) throw new Error("Supabase not configured")
+      const supabase = getSupabase?.()
+      if (supabase) {
+        const { error } = await supabase.from("callover_reports").insert({
+          ticket_ref: ticketRef,
+          officer,
+          data: rows,
+          created_at: new Date().toISOString(),
+        })
+        if (error) throw error
+        alert("✅ Report submitted successfully!")
+      } else {
+        // local fallback
+        localStorage.setItem("callover_backup", JSON.stringify({ ticketRef, officer, rows }))
+        alert("Saved locally (Supabase not active).")
+      }
 
-      const { error } = await supabase.from("callover_reports").insert({
-        ticket_ref: ticketRef,
-        officer,
-        records: rows,
-        created_at: new Date().toISOString(),
-      })
-
-      if (error) throw error
-
-      alert("✅ Call-Over Report submitted successfully!")
       setRows([])
       setTicketRef("")
       setOfficer("")
-    } catch (error) {
-      console.error("Submission error:", error)
-      alert("Could not submit to server. Saving locally as backup.")
-
-      // fallback save
-      localStorage.setItem("callover_backup", JSON.stringify({ ticketRef, officer, rows }))
+    } catch (err: any) {
+      console.error("Submit failed:", err)
+      setError("Failed to submit. Check connection or Supabase config.")
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-foreground">Smart Call-Over</h1>
-          <p className="text-muted-foreground">
-            Upload transaction journals, review entries, and flag exceptions for review.
-          </p>
-        </div>
-      </div>
+    <div className="space-y-8">
+      <header>
+        <h1 className="text-3xl font-bold text-foreground">Smart Call-Over</h1>
+        <p className="text-muted-foreground">
+          Upload transaction journal, review entries, and flag exceptions automatically.
+        </p>
+      </header>
 
-      <Card className="border-primary/20 bg-card/50 backdrop-blur">
+      {error && (
+        <div className="p-3 bg-red-100 border border-red-300 text-red-700 rounded-md">{error}</div>
+      )}
+
+      <Card className="border-primary/30 bg-card/50 backdrop-blur">
         <CardHeader>
           <CardTitle>Upload Journal</CardTitle>
-          <CardDescription>Select your daily transaction Excel sheet to begin.</CardDescription>
+          <CardDescription>Select your daily transaction Excel file (.xlsx)</CardDescription>
         </CardHeader>
         <CardContent className="flex items-center gap-3">
           <Input type="file" accept=".xlsx,.xls" onChange={handleUpload} className="w-1/2" />
@@ -130,10 +143,12 @@ export default function SmartCallOver() {
         </CardContent>
       </Card>
 
-      <Card className="border-primary/20 bg-card/50 backdrop-blur">
+      <Card className="border-primary/30 bg-card/50 backdrop-blur">
         <CardHeader>
           <CardTitle>Transaction Review</CardTitle>
-          <CardDescription>Flag mismatched or suspicious transactions before submitting.</CardDescription>
+          <CardDescription>
+            Mark transactions as Correct or Exception, and provide reasons for flagged entries.
+          </CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
           <Table>
@@ -145,7 +160,7 @@ export default function SmartCallOver() {
                 <TableHead>Processor</TableHead>
                 <TableHead>Authorizer</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead>Reason (if Exception)</TableHead>
+                <TableHead>Reason</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -153,15 +168,15 @@ export default function SmartCallOver() {
                 <TableRow>
                   <TableCell colSpan={7} className="text-center text-muted-foreground py-6">
                     <FileSpreadsheet className="inline-block h-5 w-5 mr-2" />
-                    No transactions uploaded
+                    No transactions uploaded yet
                   </TableCell>
                 </TableRow>
               ) : (
                 rows.map((row) => (
                   <TableRow key={row.id}>
-                    <TableCell className="font-mono text-sm">{row.Date}</TableCell>
+                    <TableCell>{row.Date}</TableCell>
                     <TableCell className="max-w-xs truncate">{row.Narration}</TableCell>
-                    <TableCell className="font-mono text-right">
+                    <TableCell className="text-right font-mono">
                       ₦{row.Amount.toLocaleString()}
                     </TableCell>
                     <TableCell>{row.Processor}</TableCell>
@@ -187,7 +202,7 @@ export default function SmartCallOver() {
                     <TableCell>
                       {row.status === "Exception" && (
                         <Textarea
-                          placeholder="Enter reason..."
+                          placeholder="Enter reason"
                           className="h-8 text-sm"
                           value={row.reason || ""}
                           onChange={(e) => updateReason(row.id, e.target.value)}
@@ -203,25 +218,23 @@ export default function SmartCallOver() {
       </Card>
 
       {rows.length > 0 && (
-        <Card className="border-primary/20 bg-card/50 backdrop-blur">
+        <Card className="border-primary/30 bg-card/50 backdrop-blur">
           <CardHeader>
             <CardTitle>Finalize & Submit</CardTitle>
-            <CardDescription>
-              Provide required info before sending to Admin or Operations Supervisor.
-            </CardDescription>
+            <CardDescription>Provide required details before submission.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3">
+          <CardContent className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-foreground mb-1">Ticket Reference / Batch No</label>
+                <label className="block text-sm font-medium mb-1">Ticket Reference</label>
                 <Input
                   value={ticketRef}
                   onChange={(e) => setTicketRef(e.target.value)}
-                  placeholder="e.g. TCK-2025-1001"
+                  placeholder="e.g. TCK-2025-1002"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-foreground mb-1">Call-Over Officer</label>
+                <label className="block text-sm font-medium mb-1">Call-Over Officer</label>
                 <Input
                   value={officer}
                   onChange={(e) => setOfficer(e.target.value)}
