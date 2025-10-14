@@ -4,7 +4,6 @@ import React, { useState } from "react"
 import * as XLSX from "xlsx"
 import { Upload, CheckCircle, AlertCircle, Send, Download } from "lucide-react"
 
-/* ---------------- UI COMPONENTS ---------------- */
 const Card = ({ title, children }: { title?: string; children: React.ReactNode }) => (
   <div className="border border-gray-200 rounded-lg p-4 bg-white shadow-sm">
     {title && <h2 className="font-semibold text-lg mb-2">{title}</h2>}
@@ -42,7 +41,6 @@ const Table = ({ children }: { children: React.ReactNode }) => (
   <table className="w-full text-sm border border-gray-200">{children}</table>
 )
 
-/* ---------------- MAIN COMPONENT ---------------- */
 interface CallOverRow {
   id: number
   Date: string
@@ -58,20 +56,16 @@ export default function CallOverPage() {
   const [rows, setRows] = useState<CallOverRow[]>([])
   const [ticketRef, setTicketRef] = useState("")
   const [officer, setOfficer] = useState("")
-  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  /* ---------- Upload Excel ---------- */
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-
     try {
       const buf = await file.arrayBuffer()
       const workbook = XLSX.read(buf)
       const sheet = workbook.SheetNames[0]
       const data = XLSX.utils.sheet_to_json<any>(workbook.Sheets[sheet], { defval: "" })
-
       const formatted: CallOverRow[] = data.map((r: any, i: number) => ({
         id: i + 1,
         Date: r.Date || r["Transaction Date"] || "-",
@@ -81,7 +75,6 @@ export default function CallOverPage() {
         Authorizer: r.Authorizer || r.Approver || "-",
         status: "Pending",
       }))
-
       setRows(formatted)
       setError(null)
     } catch (err) {
@@ -90,7 +83,6 @@ export default function CallOverPage() {
     }
   }
 
-  /* ---------- Row actions ---------- */
   const toggleStatus = (id: number, status: "Correct" | "Exception") => {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)))
   }
@@ -99,36 +91,21 @@ export default function CallOverPage() {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, reason } : r)))
   }
 
-  /* ---------- Submit locally ---------- */
   const handleSubmit = () => {
     if (!ticketRef || !officer) {
       alert("Please fill in Ticket Reference and Officer Name.")
       return
     }
-
-    const report = {
-      ticketRef,
-      officer,
-      date: new Date().toISOString(),
-      data: rows,
-    }
-
+    const report = { ticketRef, officer, date: new Date().toISOString(), data: rows }
     localStorage.setItem("calloverReport", JSON.stringify(report))
     alert("✅ Call-Over report saved locally.")
-
     setRows([])
     setTicketRef("")
     setOfficer("")
   }
 
-  /* ---------- Download JSON ---------- */
   const handleDownload = () => {
-    const report = {
-      ticketRef,
-      officer,
-      date: new Date().toISOString(),
-      data: rows,
-    }
+    const report = { ticketRef, officer, date: new Date().toISOString(), data: rows }
     const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
@@ -145,24 +122,15 @@ export default function CallOverPage() {
         Upload the daily transaction journal, verify records, mark exceptions, and submit your findings.
       </p>
 
-      {error && (
-        <div className="bg-red-100 border border-red-300 text-red-700 px-4 py-2 rounded">{error}</div>
-      )}
+      {error && <div className="bg-red-100 border border-red-300 text-red-700 px-4 py-2 rounded">{error}</div>}
 
-      {/* Upload */}
       <Card title="Upload Journal">
         <div className="flex items-center gap-3">
           <Upload className="h-5 w-5 text-gray-500" />
-          <input
-            type="file"
-            accept=".xlsx,.xls"
-            onChange={handleUpload}
-            className="text-sm border border-gray-300 p-2 rounded"
-          />
+          <input type="file" accept=".xlsx,.xls" onChange={handleUpload} className="text-sm border border-gray-300 p-2 rounded"/>
         </div>
       </Card>
 
-      {/* Table display */}
       {rows.length > 0 && (
         <Card title="Transaction Review">
           <div className="overflow-x-auto">
@@ -187,19 +155,11 @@ export default function CallOverPage() {
                     <td className="p-2">{r.Processor}</td>
                     <td className="p-2">{r.Authorizer}</td>
                     <td className="p-2 text-center space-x-2">
-                      <Button
-                        onClick={() => toggleStatus(r.id, "Correct")}
-                        variant={r.status === "Correct" ? "primary" : "outline"}
-                      >
-                        <CheckCircle className="inline-block h-4 w-4 mr-1" />
-                        Correct
+                      <Button onClick={() => toggleStatus(r.id, "Correct")} variant={r.status === "Correct" ? "primary" : "outline"}>
+                        <CheckCircle className="inline-block h-4 w-4 mr-1" />Correct
                       </Button>
-                      <Button
-                        onClick={() => toggleStatus(r.id, "Exception")}
-                        variant={r.status === "Exception" ? "danger" : "outline"}
-                      >
-                        <AlertCircle className="inline-block h-4 w-4 mr-1" />
-                        Exception
+                      <Button onClick={() => toggleStatus(r.id, "Exception")} variant={r.status === "Exception" ? "danger" : "outline"}>
+                        <AlertCircle className="inline-block h-4 w-4 mr-1" />Exception
                       </Button>
                     </td>
                     <td className="p-2">
@@ -220,47 +180,24 @@ export default function CallOverPage() {
         </Card>
       )}
 
-      {/* Submit section */}
       {rows.length > 0 && (
         <Card title="Finalize & Submit">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="text-sm font-medium text-gray-700">Ticket Reference</label>
-              <input
-                value={ticketRef}
-                onChange={(e) => setTicketRef(e.target.value)}
-                className="mt-1 border border-gray-300 rounded p-2 w-full"
-                placeholder="e.g. TCK-2025-1003"
-              />
+              <input value={ticketRef} onChange={(e) => setTicketRef(e.target.value)} className="mt-1 border border-gray-300 rounded p-2 w-full" placeholder="e.g. TCK-2025-1003"/>
             </div>
             <div>
               <label className="text-sm font-medium text-gray-700">Call-Over Officer</label>
-              <input
-                value={officer}
-                onChange={(e) => setOfficer(e.target.value)}
-                className="mt-1 border border-gray-300 rounded p-2 w-full"
-                placeholder="Officer name"
-              />
+              <input value={officer} onChange={(e) => setOfficer(e.target.value)} className="mt-1 border border-gray-300 rounded p-2 w-full" placeholder="Officer name"/>
             </div>
           </div>
-
           <div className="mt-4 flex gap-3 justify-end">
-            <Button onClick={handleSubmit} disabled={loading}>
-              <Send className="inline-block h-4 w-4 mr-1" />
-              {loading ? "Submitting..." : "Submit Report"}
-            </Button>
-            <Button onClick={handleDownload} variant="outline">
-              <Download className="inline-block h-4 w-4 mr-1" />
-              Download JSON
-            </Button>
+            <Button onClick={handleSubmit}><Send className="inline-block h-4 w-4 mr-1"/>Submit Report</Button>
+            <Button onClick={handleDownload} variant="outline"><Download className="inline-block h-4 w-4 mr-1"/>Download JSON</Button>
           </div>
         </Card>
       )}
-
-      {/* Sample alert space */}
-      <div className="p-3 text-xs text-gray-500 border-t border-gray-200">
-        📧 <b>Sample Alert Space:</b> “Daily call-over summary will appear here when email service is enabled.”
-      </div>
     </div>
   )
 }
