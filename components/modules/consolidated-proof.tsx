@@ -19,6 +19,7 @@ const EURO_DENOMINATIONS = [500, 200, 100, 50, 20, 10, 5]
 interface TellerData {
   id: string
   name: string
+  // these maps now hold exact amounts (not counts)
   buy: { [key: number]: number }
   sell: { [key: number]: number }
 }
@@ -38,6 +39,7 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
   const [branchName, setBranchName] = useState("")
   const [country, setCountry] = useState("")
 
+  // Balance B/F holds exact amounts keyed by denomination (if you use them)
   const [balanceBF, setBalanceBF] = useState<{ [key: number]: number }>({})
 
   const getDenominations = () => {
@@ -83,14 +85,20 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
     setTellers(tellers.map((t) => (t.id === tellerId ? { ...t, name } : t)))
   }
 
+  // NOTE: these update functions now store the value the user typed (exact amount)
   const updateTellerBuy = (tellerId: string, denomination: number, value: number) => {
-    setTellers(tellers.map((t) => (t.id === tellerId ? { ...t, buy: { ...t.buy, [denomination]: value } } : t)))
+    setTellers((prev) =>
+      prev.map((t) => (t.id === tellerId ? { ...t, buy: { ...t.buy, [denomination]: value } } : t)),
+    )
   }
 
   const updateTellerSell = (tellerId: string, denomination: number, value: number) => {
-    setTellers(tellers.map((t) => (t.id === tellerId ? { ...t, sell: { ...t.sell, [denomination]: value } } : t)))
+    setTellers((prev) =>
+      prev.map((t) => (t.id === tellerId ? { ...t, sell: { ...t.sell, [denomination]: value } } : t)),
+    )
   }
 
+  // Totals are direct sums of the entered amounts (no multiplication by denomination)
   const calculateTotalDeposit = (denomination: number) => {
     return tellers.reduce((sum, teller) => sum + (teller.buy[denomination] || 0), 0)
   }
@@ -99,6 +107,7 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
     return tellers.reduce((sum, teller) => sum + (teller.sell[denomination] || 0), 0)
   }
 
+  // Balance per denom is BF + deposit - withdrawal (all exact amounts)
   const calculateTotalBalance = (denomination: number) => {
     const bf = balanceBF[denomination] || 0
     const deposit = calculateTotalDeposit(denomination)
@@ -106,6 +115,7 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
     return bf + deposit - withdrawal
   }
 
+  // Grand totals sum the per-denomination amounts directly (not multiplying by denom)
   const calculateGrandTotal = (type: "bf" | "deposit" | "withdrawal" | "balance") => {
     const denominations = getDenominations()
     return denominations.reduce((sum, denom) => {
@@ -172,18 +182,21 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
     }
   }
 
-  // ✅ New Excel Export Function
+  // Export exact entered amounts into Excel (Summary + Teller Breakdown)
   const handleExport = () => {
     const date = new Date().toISOString().split("T")[0]
 
-    const sheet1Data = [
+    const summaryHeader = [
       ["Branch Name", branchName],
       ["Branch Code", branchCode],
       ["Country", country],
       ["Currency", currency.toUpperCase()],
       ["Date", date],
       [],
-      ["Denomination", "Balance B/F", "Total Deposit", "Total Withdrawal", "Total Balance"],
+    ]
+
+    const sheet1Body = [
+      ["Denomination", "Balance B/F (exact)", "Total Deposit (exact)", "Total Withdrawal (exact)", "Total Balance (exact)"],
       ...getDenominations().map((denom) => [
         `${getCurrencySymbol()}${denom}`,
         balanceBF[denom] || 0,
@@ -192,34 +205,22 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
         calculateTotalBalance(denom),
       ]),
       [],
-      [
-        "TOTALS",
-        calculateGrandTotal("bf"),
-        calculateGrandTotal("deposit"),
-        calculateGrandTotal("withdrawal"),
-        calculateGrandTotal("balance"),
-      ],
+      ["TOTALS (exact)", calculateGrandTotal("bf"), calculateGrandTotal("deposit"), calculateGrandTotal("withdrawal"), calculateGrandTotal("balance")],
     ]
 
-    const sheet2Data: any[] = [
-      ["Teller ID", "Teller Name", "Denomination", "Buy (Deposit)", "Sell (Withdrawal)"],
-    ]
+    const sheet1Data = [...summaryHeader, ...sheet1Body]
 
+    const sheet2Header = [["Teller ID", "Teller Name", "Denomination", "Buy (exact)", "Sell (exact)"]]
+    const sheet2Body: any[] = []
     tellers.forEach((teller) => {
       getDenominations().forEach((denom) => {
-        sheet2Data.push([
-          teller.id,
-          teller.name,
-          `${getCurrencySymbol()}${denom}`,
-          teller.buy[denom] || 0,
-          teller.sell[denom] || 0,
-        ])
+        sheet2Body.push([teller.id, teller.name, `${getCurrencySymbol()}${denom}`, teller.buy[denom] || 0, teller.sell[denom] || 0])
       })
     })
 
     const wb = XLSX.utils.book_new()
     const ws1 = XLSX.utils.aoa_to_sheet(sheet1Data)
-    const ws2 = XLSX.utils.aoa_to_sheet(sheet2Data)
+    const ws2 = XLSX.utils.aoa_to_sheet([...sheet2Header, ...sheet2Body])
 
     XLSX.utils.book_append_sheet(wb, ws1, "Summary")
     XLSX.utils.book_append_sheet(wb, ws2, "Teller Breakdown")
@@ -229,7 +230,7 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
   }
 
   const formatNumber = (num: number | undefined) => {
-    if (!num) return "0"
+    if (num === undefined || num === null) return "0"
     return num.toLocaleString(undefined, { minimumFractionDigits: 0 })
   }
 
@@ -353,7 +354,7 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
                           <Input
                             type="number"
                             className="w-28 text-right"
-                            value={balanceBF[denom] || ""}
+                            value={balanceBF[denom] ?? ""}
                             onChange={(e) =>
                               setBalanceBF({ ...balanceBF, [denom]: Number.parseFloat(e.target.value) || 0 })
                             }
@@ -437,7 +438,7 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
                               <Input
                                 type="number"
                                 className="h-8 w-24 text-right text-sm"
-                                value={teller.buy[denom] || ""}
+                                value={teller.buy[denom] ?? ""}
                                 onChange={(e) =>
                                   updateTellerBuy(teller.id, denom, Number.parseFloat(e.target.value) || 0)
                                 }
@@ -448,7 +449,7 @@ export function ConsolidatedProof({ userId }: ConsolidatedProofProps) {
                               <Input
                                 type="number"
                                 className="h-8 w-24 text-right text-sm"
-                                value={teller.sell[denom] || ""}
+                                value={teller.sell[denom] ?? ""}
                                 onChange={(e) =>
                                   updateTellerSell(teller.id, denom, Number.parseFloat(e.target.value) || 0)
                                 }
