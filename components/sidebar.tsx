@@ -32,17 +32,11 @@ const modules = [
     id: "smart-reconciliation",
     name: "Smart Reconciliation",
     icon: FileSpreadsheet,
-    children: [
-      {
-        id: "pending-reports",
-        name: "Pending & Mismatched Reports",
-        icon: AlertCircle,
-      },
-    ],
+  
   },
   {
     id: "history-logs",
-    name: "History Logs",
+    name: "Call Over",
     icon: History,
   },
   {
