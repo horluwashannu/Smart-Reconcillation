@@ -3,7 +3,6 @@
 import { useState } from "react"
 import {
   FileSpreadsheet,
-  AlertCircle,
   History,
   Settings,
   Shield,
@@ -32,7 +31,6 @@ const modules = [
     id: "smart-reconciliation",
     name: "Smart Reconciliation",
     icon: FileSpreadsheet,
-  
   },
   {
     id: "history-logs",
@@ -74,29 +72,45 @@ const adminModules = [
   },
 ]
 
-export function Sidebar({ activeModule, setActiveModule, collapsed, setCollapsed, userRole }: SidebarProps) {
-  const [expandedMenus, setExpandedMenus] = useState<string[]>(["smart-reconciliation"])
+export function Sidebar({
+  activeModule,
+  setActiveModule,
+  collapsed,
+  setCollapsed,
+  userRole,
+}: SidebarProps) {
+  const [expandedMenus, setExpandedMenus] = useState<string[]>([])
 
   const toggleMenu = (menuId: string) => {
-    setExpandedMenus((prev) => (prev.includes(menuId) ? prev.filter((id) => id !== menuId) : [...prev, menuId]))
+    setExpandedMenus((prev) =>
+      prev.includes(menuId) ? prev.filter((id) => id !== menuId) : [...prev, menuId]
+    )
   }
 
   return (
     <aside
       className={cn(
         "relative z-20 flex flex-col border-r border-sidebar-border bg-sidebar/95 backdrop-blur-xl transition-all duration-300",
-        collapsed ? "w-16" : "w-72",
+        collapsed ? "w-16" : "w-72"
       )}
     >
       <div className="flex h-16 items-center justify-between border-b border-sidebar-border px-4">
-        {!collapsed && <h1 className="text-lg font-bold text-sidebar-foreground">Smart Reconciliation</h1>}
+        {!collapsed && (
+          <h1 className="text-lg font-bold text-sidebar-foreground">
+            Smart Reconciliation
+          </h1>
+        )}
         <Button
           variant="ghost"
           size="icon"
           onClick={() => setCollapsed(!collapsed)}
           className="text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
         >
-          {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+          {collapsed ? (
+            <ChevronRight className="h-4 w-4" />
+          ) : (
+            <ChevronLeft className="h-4 w-4" />
+          )}
         </Button>
       </div>
 
@@ -104,36 +118,37 @@ export function Sidebar({ activeModule, setActiveModule, collapsed, setCollapsed
         {modules.map((module) => {
           const Icon = module.icon
           const isActive = activeModule === module.id
-          const hasChildren = module.children && module.children.length > 0
           const isExpanded = expandedMenus.includes(module.id)
+          const hasChildren = Array.isArray(module.children) && module.children.length > 0
 
           return (
             <div key={module.id}>
               <button
+                type="button"
                 onClick={() => {
                   if (hasChildren) {
                     toggleMenu(module.id)
-                    if (!isExpanded) {
-                      setActiveModule(module.id)
-                    }
-                  } else {
-                    setActiveModule(module.id)
                   }
+                  setActiveModule(module.id)
                 }}
                 className={cn(
                   "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200",
                   isActive
                     ? "bg-gradient-to-r from-primary to-accent text-primary-foreground shadow-lg shadow-primary/20"
-                    : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                    : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                 )}
                 title={collapsed ? module.name : undefined}
               >
-                <Icon className="h-5 w-5 shrink-0" />
+                {Icon && <Icon className="h-5 w-5 shrink-0" />}
                 {!collapsed && (
                   <>
                     <span className="flex-1 text-left">{module.name}</span>
                     {hasChildren &&
-                      (isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />)}
+                      (isExpanded ? (
+                        <ChevronUp className="h-4 w-4" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4" />
+                      ))}
                   </>
                 )}
               </button>
@@ -143,19 +158,19 @@ export function Sidebar({ activeModule, setActiveModule, collapsed, setCollapsed
                   {module.children?.map((child) => {
                     const ChildIcon = child.icon
                     const isChildActive = activeModule === child.id
-
                     return (
                       <button
                         key={child.id}
+                        type="button"
                         onClick={() => setActiveModule(child.id)}
                         className={cn(
                           "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200",
                           isChildActive
                             ? "bg-gradient-to-r from-primary/80 to-accent/80 text-primary-foreground shadow-md shadow-primary/10"
-                            : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                            : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                         )}
                       >
-                        <ChildIcon className="h-4 w-4 shrink-0" />
+                        {ChildIcon && <ChildIcon className="h-4 w-4 shrink-0" />}
                         <span className="text-left">{child.name}</span>
                       </button>
                     )
@@ -169,9 +184,11 @@ export function Sidebar({ activeModule, setActiveModule, collapsed, setCollapsed
         {userRole === "admin" && (
           <>
             <div className="my-4 border-t border-sidebar-border" />
-            <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              {!collapsed && "Admin Only"}
-            </div>
+            {!collapsed && (
+              <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Admin Only
+              </div>
+            )}
             {adminModules.map((module) => {
               const Icon = module.icon
               const isActive = activeModule === module.id
@@ -179,16 +196,17 @@ export function Sidebar({ activeModule, setActiveModule, collapsed, setCollapsed
               return (
                 <button
                   key={module.id}
+                  type="button"
                   onClick={() => setActiveModule(module.id)}
                   className={cn(
                     "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200",
                     isActive
                       ? "bg-gradient-to-r from-primary to-accent text-primary-foreground shadow-lg shadow-primary/20"
-                      : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                      : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                   )}
                   title={collapsed ? module.name : undefined}
                 >
-                  <Icon className="h-5 w-5 shrink-0" />
+                  {Icon && <Icon className="h-5 w-5 shrink-0" />}
                   {!collapsed && <span>{module.name}</span>}
                 </button>
               )
