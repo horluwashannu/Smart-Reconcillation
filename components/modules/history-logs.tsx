@@ -2,10 +2,10 @@
 
 import React, { useState } from "react"
 import * as XLSX from "xlsx"
-import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, Send } from "lucide-react"
+import { Upload, CheckCircle, AlertCircle, Send } from "lucide-react"
 
 /* ---------------- SAFE FALLBACK UI COMPONENTS ---------------- */
-const Card = ({ title, children }: { title?: string; children: any }) => (
+const Card = ({ title, children }: { title?: string; children: React.ReactNode }) => (
   <div className="border border-gray-200 rounded-lg p-4 bg-white shadow-sm">
     {title && <h2 className="font-semibold text-lg mb-2">{title}</h2>}
     {children}
@@ -19,7 +19,7 @@ const Button = ({
   disabled,
 }: {
   onClick?: () => void
-  children: any
+  children: React.ReactNode
   variant?: "primary" | "danger" | "outline"
   disabled?: boolean
 }) => {
@@ -38,11 +38,11 @@ const Button = ({
   )
 }
 
-const Table = ({ children }: { children: any }) => (
+const Table = ({ children }: { children: React.ReactNode }) => (
   <table className="w-full text-sm border border-gray-200">{children}</table>
 )
 
-/* ---------------- MAIN CALL-OVER COMPONENT ---------------- */
+/* ---------------- MAIN COMPONENT ---------------- */
 interface CallOverRow {
   id: number
   Date: string
@@ -72,14 +72,14 @@ export default function CallOverPage() {
       const sheet = workbook.SheetNames[0]
       const data = XLSX.utils.sheet_to_json<any>(workbook.Sheets[sheet], { defval: "" })
 
-      const formatted = data.map((r: any, i: number) => ({
+      const formatted: CallOverRow[] = data.map((r: any, i: number) => ({
         id: i + 1,
         Date: r.Date || r["Transaction Date"] || "-",
         Narration: r.Narration || r.Description || "-",
         Amount: Number(r.Amount || r["Transaction Amount"] || 0),
         Processor: r.Processor || r.Inputter || "-",
         Authorizer: r.Authorizer || r.Approver || "-",
-        status: "Pending" as const,
+        status: "Pending",
       }))
 
       setRows(formatted)
@@ -114,9 +114,8 @@ export default function CallOverPage() {
     }
 
     localStorage.setItem("calloverReport", JSON.stringify(report))
-    alert("✅ Call-Over report saved locally (sample alert space reserved).")
+    alert("✅ Call-Over report saved locally.")
 
-    // Clear after save
     setRows([])
     setTicketRef("")
     setOfficer("")
@@ -237,7 +236,7 @@ export default function CallOverPage() {
         </Card>
       )}
 
-      {/* Empty alert space / sample notifications */}
+      {/* Empty alert space */}
       <div className="p-3 text-xs text-gray-500 border-t border-gray-200">
         📧 <b>Sample Alert Space:</b> “Daily call-over summary will appear here when email service is enabled.”
       </div>
