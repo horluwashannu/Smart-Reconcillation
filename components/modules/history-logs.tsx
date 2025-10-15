@@ -1,170 +1,140 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import * as XLSX from "xlsx"
-import { Button } from "@/components/ui/button"
+import { History, Search, RefreshCw } from "lucide-react"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { getSupabase } from "@/lib/supabase"
 
-interface RecordItem {
-  id: number
-  date: string
-  tellerName: string
-  txnId: string
-  amount: number
-  status: "Pending" | "Checked" | "Exception"
-  note?: string
+interface HistoryLog {
+  id: string
+  timestamp: string
+  user: string
+  action: string
+  status: string
+  details?: string
 }
 
-export default function HistoryLogs() {
-  const [records, setRecords] = useState<RecordItem[]>([])
-  const [fileName, setFileName] = useState("")
+export function HistoryLogs() {
+  const [logs, setLogs] = useState<HistoryLog[]>([])
+  const [searchTerm, setSearchTerm] = useState("")
+  const [loading, setLoading] = useState(false)
 
-  // Load stored records from localStorage
+  const fetchHistoryLogs = async () => {
+    setLoading(true)
+    try {
+      const supabase = getSupabase()
+      if (supabase) {
+        const { data, error } = await supabase
+          .from("history_logs")
+          .select("*")
+          .order("timestamp", { ascending: false })
+          .limit(100)
+
+        if (data && !error) {
+          setLogs(data)
+        }
+      } else {
+        // Fallback to localStorage if Supabase not configured
+        const storedLogs = localStorage.getItem("historyLogs")
+        if (storedLogs) {
+          setLogs(JSON.parse(storedLogs))
+        }
+      }
+    } catch (error) {
+      console.error("Error fetching history logs:", error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   useEffect(() => {
-    const saved = localStorage.getItem("callover_records")
-    if (saved) setRecords(JSON.parse(saved))
+    fetchHistoryLogs()
   }, [])
 
-  // Auto-save any time records change
-  useEffect(() => {
-    localStorage.setItem("callover_records", JSON.stringify(records))
-  }, [records])
-
-  // Handle Excel upload
-  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setFileName(file.name)
-
-    const reader = new FileReader()
-    reader.onload = (evt) => {
-      const data = evt.target?.result
-      const workbook = XLSX.read(data, { type: "binary" })
-      const sheetName = workbook.SheetNames[0]
-      const sheet = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName])
-
-      // Convert Excel rows to record format
-      const newRecords: RecordItem[] = (sheet as any[]).map((row, index) => ({
-        id: index + 1,
-        date: row.Date || "",
-        tellerName: row.Teller || "",
-        txnId: row.TransactionID || "",
-        amount: Number(row.Amount) || 0,
-        status: "Pending",
-      }))
-
-      setRecords(newRecords)
-    }
-    reader.readAsBinaryString(file)
-  }
-
-  // Update record status
-  const updateStatus = (id: number, newStatus: "Checked" | "Exception") => {
-    setRecords((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, status: newStatus } : r))
-    )
-  }
-
-  // Add exception note
-  const updateNote = (id: number, note: string) => {
-    setRecords((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, note } : r))
-    )
-  }
-
-  // Export to Excel
-  const handleExport = () => {
-    const ws = XLSX.utils.json_to_sheet(records)
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, "CallOver")
-    XLSX.writeFile(wb, "CallOver_Results.xlsx")
-  }
+  const filteredLogs = logs.filter(
+    (log) =>
+      log.action.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      log.user.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      log.details?.toLowerCase().includes(searchTerm.toLowerCase()),
+  )
 
   return (
-    <div className="p-6">
-      <h2 className="text-2xl font-bold mb-6">Call Over (History Logs)</h2>
-
-      <div className="flex flex-col md:flex-row gap-4 items-center mb-6">
-        <Input type="file" accept=".xlsx,.xls" onChange={handleUpload} />
-        {fileName && (
-          <p className="text-sm text-gray-600">Loaded: {fileName}</p>
-        )}
-        {records.length > 0 && (
-          <Button variant="outline" onClick={handleExport}>
-            Export Results
-          </Button>
-        )}
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-foreground">History Logs</h1>
+          <p className="text-muted-foreground">View system activity and audit trail from database</p>
+        </div>
+        <Button onClick={fetchHistoryLogs} variant="outline" className="gap-2 bg-transparent" disabled={loading}>
+          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+          Refresh
+        </Button>
       </div>
 
-      {records.length === 0 ? (
-        <p className="text-gray-500 text-sm">
-          Upload an Excel file with columns like: <b>Date</b>, <b>Teller</b>,
-          <b>TransactionID</b>, <b>Amount</b>.
-        </p>
-      ) : (
-        <div className="overflow-x-auto rounded-lg border border-gray-200 shadow-sm">
-          <table className="w-full border-collapse text-sm">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="p-3 text-left">#</th>
-                <th className="p-3 text-left">Date</th>
-                <th className="p-3 text-left">Teller</th>
-                <th className="p-3 text-left">Txn ID</th>
-                <th className="p-3 text-left">Amount</th>
-                <th className="p-3 text-left">Status</th>
-                <th className="p-3 text-left">Note</th>
-                <th className="p-3 text-left">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {records.map((r) => (
-                <tr
-                  key={r.id}
-                  className={`border-t ${
-                    r.status === "Checked"
-                      ? "bg-green-50"
-                      : r.status === "Exception"
-                      ? "bg-red-50"
-                      : ""
-                  }`}
-                >
-                  <td className="p-3">{r.id}</td>
-                  <td className="p-3">{r.date}</td>
-                  <td className="p-3">{r.tellerName}</td>
-                  <td className="p-3">{r.txnId}</td>
-                  <td className="p-3">{r.amount.toLocaleString()}</td>
-                  <td className="p-3 font-medium">{r.status}</td>
-                  <td className="p-3">
-                    <Input
-                      type="text"
-                      placeholder="Add note..."
-                      value={r.note || ""}
-                      onChange={(e) => updateNote(r.id, e.target.value)}
-                      className="text-xs"
-                    />
-                  </td>
-                  <td className="p-3 space-x-2">
-                    <Button
-                      size="sm"
-                      variant="default"
-                      onClick={() => updateStatus(r.id, "Checked")}
-                    >
-                      ✔
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => updateStatus(r.id, "Exception")}
-                    >
-                      ⚠
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <History className="h-5 w-5 text-primary" />
+                Activity Log
+              </CardTitle>
+              <CardDescription>Recent system activities and user actions</CardDescription>
+            </div>
+            <div className="relative w-64">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Search logs..."
+                className="pl-9"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="rounded-lg border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Log ID</TableHead>
+                  <TableHead>Timestamp</TableHead>
+                  <TableHead>User</TableHead>
+                  <TableHead>Action</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Details</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredLogs.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center text-muted-foreground">
+                      {loading ? "Loading logs..." : "No logs found"}
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  filteredLogs.map((log) => (
+                    <TableRow key={log.id}>
+                      <TableCell className="font-medium">{log.id}</TableCell>
+                      <TableCell className="font-mono text-sm">{log.timestamp}</TableCell>
+                      <TableCell>{log.user}</TableCell>
+                      <TableCell>{log.action}</TableCell>
+                      <TableCell>
+                        <Badge variant={log.status === "Success" ? "default" : "destructive"}>{log.status}</Badge>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">{log.details || "-"}</TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }
