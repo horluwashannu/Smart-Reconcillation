@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import React, { useState } from "react";
+import dynamic from "next/dynamic";
 import * as XLSX from "xlsx";
-import { motion, AnimatePresence } from "framer-motion";
 import {
   Card,
   CardContent,
@@ -24,32 +24,26 @@ import {
   TableCell,
 } from "@/components/ui/table";
 
-type TellerRow = {
-  ACCOUNT_NO?: string;
-  OPENING_BALANCE?: number;
-  CASH_DEP?: number;
-  CASH_DEP_2?: number;
-  SAVINGS_WITHDR?: number;
-  TO_VAULT?: number;
-  FROM_VAULT?: number;
-  EXPENSE?: number;
-  WUMT?: number;
-  Column1?: string;
-};
+// ✅ Dynamically import framer-motion (safe for Vercel)
+const MotionDiv = dynamic(
+  () =>
+    import("framer-motion").then((mod) => ({
+      default: mod.motion.div,
+    })),
+  { ssr: false }
+);
+const AnimatePresence = dynamic(
+  () =>
+    import("framer-motion").then((mod) => ({
+      default: mod.AnimatePresence,
+    })),
+  { ssr: false }
+);
 
-type GLRow = {
-  Date?: string;
-  Branch?: string;
-  AccountNo?: string;
-  Type?: string;
-  Currency?: string;
-  Amount?: number;
-  User?: string;
-  Authorizer?: string;
-  Reference?: string;
-};
+type TellerRow = Record<string, any>;
+type GLRow = Record<string, any>;
 
-export function TellerProof() {
+export default function TellerProof() {
   const [activeTab, setActiveTab] = useState<
     "teller_debit" | "teller_credit" | "gl_debit" | "gl_credit"
   >("teller_debit");
@@ -79,28 +73,17 @@ export function TellerProof() {
       const wb = XLSX.read(data, { type: "array" });
       const sheet = findCastSheet(wb);
       const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
-      const header = raw[0].map((h) => String(h || "").trim());
-      const rows = raw.slice(1).map((r) => {
+      const header = raw[0].map((h: any) => String(h || "").trim());
+      const rows = raw.slice(1).map((r: any[]) => {
         const obj: any = {};
-        header.forEach((h, i) => {
+        header.forEach((h: string, i: number) => {
           obj[h.replace(/\s+/g, "_").toUpperCase()] = r[i];
         });
-        return {
-          ACCOUNT_NO:
-            obj["ACCOUNT_NO"] || obj["ACCOUNT"] || obj["ACCOUNTNUMBER"],
-          OPENING_BALANCE: safeNumber(obj["OPENING_BALANCE"]),
-          CASH_DEP: safeNumber(obj["CASH_DEP"]),
-          CASH_DEP_2: safeNumber(obj["CASH_DEP_2"]),
-          SAVINGS_WITHDR: safeNumber(obj["SAVINGS_WITHDR"]),
-          TO_VAULT: safeNumber(obj["TO_VAULT"]),
-          FROM_VAULT: safeNumber(obj["FROM_VAULT"]),
-          EXPENSE: safeNumber(obj["EXPENSE"]),
-          WUMT: safeNumber(obj["WUMT"]),
-          Column1: obj["NARRATION"] || "",
-        };
+        return obj;
       });
       setTellerRows(rows.filter((r) => r.ACCOUNT_NO));
-    } catch {
+    } catch (err) {
+      console.error(err);
       alert("Invalid Teller (CAST) file or missing 'cast' sheet.");
     }
   };
@@ -111,36 +94,36 @@ export function TellerProof() {
       const wb = XLSX.read(data, { type: "array" });
       const sheet = wb.Sheets[wb.SheetNames[0]];
       const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
-      const header = raw[0].map((h) => String(h || "").trim().toLowerCase());
-      const rows = raw.slice(1).map((r) => ({
-        Date: String(r[header.findIndex((h) => h.includes("transaction date"))] || ""),
-        Branch: String(r[header.findIndex((h) => h.includes("branch"))] || ""),
-        AccountNo: String(r[header.findIndex((h) => h.includes("account"))] || ""),
-        Type: String(r[header.findIndex((h) => h.includes("dr/cr"))] || ""),
-        Currency: String(r[header.findIndex((h) => h.includes("currency"))] || ""),
+      const header = raw[0].map((h: any) => String(h || "").trim().toLowerCase());
+      const rows = raw.slice(1).map((r: any[]) => ({
+        Date: String(r[header.findIndex((h: string) => h.includes("transaction date"))] || ""),
+        Branch: String(r[header.findIndex((h: string) => h.includes("branch"))] || ""),
+        AccountNo: String(r[header.findIndex((h: string) => h.includes("account"))] || ""),
+        Type: String(r[header.findIndex((h: string) => h.includes("dr/cr"))] || ""),
+        Currency: String(r[header.findIndex((h: string) => h.includes("currency"))] || ""),
         Amount: safeNumber(
-          r[header.findIndex((h) => h.includes("lcy amount") || h.includes("amount"))]
+          r[header.findIndex((h: string) => h.includes("lcy amount") || h.includes("amount"))]
         ),
-        User: String(r[header.findIndex((h) => h.includes("user"))] || ""),
-        Authorizer: String(r[header.findIndex((h) => h.includes("authoriser"))] || ""),
-        Reference: String(r[header.findIndex((h) => h.includes("reference"))] || ""),
+        User: String(r[header.findIndex((h: string) => h.includes("user"))] || ""),
+        Authorizer: String(r[header.findIndex((h: string) => h.includes("authoriser"))] || ""),
+        Reference: String(r[header.findIndex((h: string) => h.includes("reference"))] || ""),
       }));
       setGlRows(rows.filter((r) => r.AccountNo));
       setFilteredGl(rows.filter((r) => r.AccountNo));
-    } catch {
+    } catch (err) {
+      console.error(err);
       alert("Invalid GL file format.");
     }
   };
 
   const handleFilter = () => {
-    if (!glFilterUser.trim()) {
-      setFilteredGl(glRows);
-    } else {
-      const filtered = glRows.filter((r) =>
-        r.User?.toLowerCase().includes(glFilterUser.toLowerCase())
+    if (!glFilterUser.trim()) setFilteredGl(glRows);
+    else
+      setFilteredGl(
+        glRows.filter((r) =>
+          r.User?.toLowerCase().includes(glFilterUser.toLowerCase())
+        )
       );
-      setFilteredGl(filtered);
-    }
   };
 
   const handleExport = () => {
@@ -160,9 +143,7 @@ export function TellerProof() {
       <Card className="max-w-7xl mx-auto shadow-xl border-none rounded-2xl">
         <CardHeader className="bg-gradient-to-r from-blue-600 to-teal-500 text-white rounded-t-2xl p-6">
           <CardTitle className="text-2xl font-bold">Teller Proof Dashboard</CardTitle>
-          <CardDescription className="text-blue-100">
-            Upload Teller & GL files for reconciliation and preview below
-          </CardDescription>
+          <CardDescription>Upload Teller & GL files and preview</CardDescription>
         </CardHeader>
 
         <CardContent className="p-6 space-y-6">
@@ -173,9 +154,7 @@ export function TellerProof() {
               <Input
                 type="file"
                 accept=".xlsx,.xls,.csv"
-                onChange={(e) =>
-                  e.target.files?.[0] && parseTeller(e.target.files[0])
-                }
+                onChange={(e) => e.target.files?.[0] && parseTeller(e.target.files[0])}
               />
               {tellerRows.length > 0 && (
                 <Badge className="mt-2 bg-green-600">
@@ -191,9 +170,7 @@ export function TellerProof() {
                 onChange={(e) => e.target.files?.[0] && parseGL(e.target.files[0])}
               />
               {glRows.length > 0 && (
-                <Badge className="mt-2 bg-blue-600">
-                  {glRows.length} GL Rows Loaded
-                </Badge>
+                <Badge className="mt-2 bg-blue-600">{glRows.length} GL Rows Loaded</Badge>
               )}
             </div>
           </div>
@@ -211,7 +188,7 @@ export function TellerProof() {
             ))}
           </div>
 
-          {/* GL Filter */}
+          {/* Filter */}
           {activeTab.includes("gl") && (
             <div className="flex flex-wrap gap-3 items-center justify-center mt-4">
               <Input
@@ -244,9 +221,9 @@ export function TellerProof() {
             </div>
           </div>
 
-          {/* Preview Table with smooth transition + scroll */}
-          <AnimatePresence mode="wait">
-            <motion.div
+          {/* Animated Table */}
+          <AnimatePresence>
+            <MotionDiv
               key={activeTab}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -266,7 +243,7 @@ export function TellerProof() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {currentData.map((row, i) => (
+                    {currentData.slice(0, 50).map((row, i) => (
                       <TableRow key={i}>
                         {Object.values(row)
                           .slice(0, 8)
@@ -279,10 +256,10 @@ export function TellerProof() {
                 </Table>
               ) : (
                 <div className="p-8 text-center text-gray-500">
-                  No data available for this view.
+                  No data to display.
                 </div>
               )}
-            </motion.div>
+            </MotionDiv>
           </AnimatePresence>
 
           {/* Actions */}
@@ -293,10 +270,7 @@ export function TellerProof() {
             >
               <Download className="mr-2 h-4 w-4" /> Export Result
             </Button>
-            <Button
-              variant="outline"
-              onClick={() => alert("Submitted Successfully ✅")}
-            >
+            <Button variant="outline" onClick={() => alert("Submitted ✅")}>
               Dummy Submit
             </Button>
           </div>
