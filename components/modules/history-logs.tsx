@@ -1,138 +1,206 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { History, Search, RefreshCw } from "lucide-react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Badge } from "@/components/ui/badge"
+import { useState } from "react"
+import * as XLSX from "xlsx"
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { getSupabase } from "@/lib/supabase"
+import { Label } from "@/components/ui/label"
+import { Input } from "@/components/ui/input"
+import { Badge } from "@/components/ui/badge"
+import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table"
 
-interface HistoryLog {
-  id: string
-  timestamp: string
-  user: string
-  action: string
-  status: string
-  details?: string
+type GLRow = {
+  BranchCode?: string
+  TransactionDescription?: string
+  AccountNumber?: string
+  AccountDescription?: string
+  CurrencyDrCr?: string
+  BatchNo?: string
+  TransactionDate?: string
+  UserID?: string
+  AuthoriserID?: string
+  Status?: string
 }
 
-export function HistoryLogs() {
-  const [logs, setLogs] = useState<HistoryLog[]>([])
-  const [searchTerm, setSearchTerm] = useState("")
-  const [loading, setLoading] = useState(false)
+export function GLProof() {
+  const [glRows, setGlRows] = useState<GLRow[]>([])
+  const [filteredGl, setFilteredGl] = useState<GLRow[]>([])
+  const [filterTerm, setFilterTerm] = useState("")
+  const [filterType, setFilterType] = useState<"UserID" | "AuthoriserID" | "AccountNumber">("UserID")
 
-  const fetchHistoryLogs = async () => {
-    setLoading(true)
+  const safeString = (v: any) => String(v || "").trim()
+
+  const parseGL = async (file: File) => {
     try {
-      const supabase = getSupabase()
-      if (supabase) {
-        const { data, error } = await supabase
-          .from("history_logs")
-          .select("*")
-          .order("timestamp", { ascending: false })
-          .limit(100)
+      const data = await file.arrayBuffer()
+      const wb = XLSX.read(data, { type: "array" })
+      const sheet = wb.Sheets[wb.SheetNames[0]]
+      const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })
 
-        if (data && !error) {
-          setLogs(data)
-        }
-      } else {
-        // Fallback to localStorage if Supabase not configured
-        const storedLogs = localStorage.getItem("historyLogs")
-        if (storedLogs) {
-          setLogs(JSON.parse(storedLogs))
-        }
-      }
-    } catch (error) {
-      console.error("Error fetching history logs:", error)
-    } finally {
-      setLoading(false)
+      const header = raw[0].map((h) => safeString(h).toLowerCase())
+      const findIndex = (key: string) => header.findIndex((h) => h.includes(key))
+
+      const rows: GLRow[] = raw.slice(1).map((r) => ({
+        BranchCode: safeString(r[findIndex("originating branch code")]),
+        TransactionDescription: safeString(r[findIndex("transaction description")]),
+        AccountNumber: safeString(r[findIndex("account number")]),
+        AccountDescription: safeString(r[findIndex("account / gl description")]),
+        CurrencyDrCr: safeString(r[findIndex("dr / cr")]),
+        BatchNo: safeString(r[findIndex("batch no")]),
+        TransactionDate: safeString(r[findIndex("transaction date")]),
+        UserID: safeString(r[findIndex("user id")]),
+        AuthoriserID: safeString(r[findIndex("authoriser id")]),
+      }))
+
+      // Auto-detect audit status logic (simple sample: you can adjust)
+      const processed = rows.map((r) => {
+        let status = "Okay"
+        if (r.UserID && r.AuthoriserID && r.UserID === r.AuthoriserID) status = "Detected"
+        else if (!r.AuthoriserID) status = "Regularized"
+        return { ...r, Status: status }
+      })
+
+      setGlRows(processed)
+      setFilteredGl(processed)
+      alert(`${processed.length} GL Rows Loaded ✅`)
+    } catch (err) {
+      console.error(err)
+      alert("Invalid GL file format or missing required columns.")
     }
   }
 
-  useEffect(() => {
-    fetchHistoryLogs()
-  }, [])
+  const handleFilter = () => {
+    if (!filterTerm.trim()) {
+      setFilteredGl(glRows)
+    } else {
+      const filtered = glRows.filter((r) =>
+        (r[filterType] || "").toLowerCase().includes(filterTerm.toLowerCase())
+      )
+      setFilteredGl(filtered)
+    }
+  }
 
-  const filteredLogs = logs.filter(
-    (log) =>
-      log.action.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      log.user.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      log.details?.toLowerCase().includes(searchTerm.toLowerCase()),
-  )
+  const getStatusColor = (status?: string) => {
+    switch (status) {
+      case "Detected":
+        return "bg-red-600 text-white"
+      case "Regularized":
+        return "bg-yellow-400 text-black"
+      default:
+        return "bg-green-600 text-white"
+    }
+  }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-foreground">History Logs</h1>
-          <p className="text-muted-foreground">View system activity and audit trail from database</p>
-        </div>
-        <Button onClick={fetchHistoryLogs} variant="outline" className="gap-2 bg-transparent" disabled={loading}>
-          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          Refresh
-        </Button>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <History className="h-5 w-5 text-primary" />
-                Activity Log
-              </CardTitle>
-              <CardDescription>Recent system activities and user actions</CardDescription>
-            </div>
-            <div className="relative w-64">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="Search logs..."
-                className="pl-9"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
-          </div>
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-800 p-6">
+      <Card className="max-w-7xl mx-auto shadow-xl border-none rounded-2xl">
+        <CardHeader className="bg-gradient-to-r from-blue-600 to-teal-500 text-white rounded-t-2xl p-6">
+          <CardTitle className="text-2xl font-bold">GL Proof Dashboard</CardTitle>
+          <CardDescription className="text-blue-100">
+            Upload GL file for audit and reconciliation
+          </CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="rounded-lg border border-border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Log ID</TableHead>
-                  <TableHead>Timestamp</TableHead>
-                  <TableHead>User</TableHead>
-                  <TableHead>Action</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Details</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredLogs.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground">
-                      {loading ? "Loading logs..." : "No logs found"}
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  filteredLogs.map((log) => (
-                    <TableRow key={log.id}>
-                      <TableCell className="font-medium">{log.id}</TableCell>
-                      <TableCell className="font-mono text-sm">{log.timestamp}</TableCell>
-                      <TableCell>{log.user}</TableCell>
-                      <TableCell>{log.action}</TableCell>
-                      <TableCell>
-                        <Badge variant={log.status === "Success" ? "default" : "destructive"}>{log.status}</Badge>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">{log.details || "-"}</TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+
+        <CardContent className="p-6 space-y-6">
+          {/* GL Upload */}
+          <div>
+            <Label>Upload GL File</Label>
+            <Input
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              onChange={(e) => e.target.files?.[0] && parseGL(e.target.files[0])}
+            />
+            {glRows.length > 0 && (
+              <Badge className="mt-2 bg-blue-600">{glRows.length} Rows Loaded</Badge>
+            )}
           </div>
+
+          {/* Filters */}
+          {glRows.length > 0 && (
+            <div className="flex flex-wrap items-center gap-4 mt-6">
+              <select
+                className="border rounded-md p-2"
+                value={filterType}
+                onChange={(e) => setFilterType(e.target.value as any)}
+              >
+                <option value="UserID">User ID</option>
+                <option value="AuthoriserID">Authoriser ID</option>
+                <option value="AccountNumber">Account Number</option>
+              </select>
+              <Input
+                placeholder={`Filter by ${filterType}`}
+                value={filterTerm}
+                onChange={(e) => setFilterTerm(e.target.value)}
+                className="w-60"
+              />
+              <Button onClick={handleFilter}>Apply Filter</Button>
+            </div>
+          )}
+
+          {/* Exception Status Box */}
+          <div className="flex justify-center gap-3 mt-4">
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 bg-red-600 rounded-full"></span> Detected
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 bg-yellow-400 rounded-full"></span> Regularized
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 bg-green-600 rounded-full"></span> Okay
+            </div>
+          </div>
+
+          {/* Preview Table */}
+          {filteredGl.length > 0 && (
+            <div className="overflow-auto border rounded-xl bg-white dark:bg-gray-700 shadow-inner mt-6 max-h-[65vh]">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    {[
+                      "Branch Code",
+                      "Transaction Description",
+                      "Account Number",
+                      "Account/GL Description",
+                      "Currency DR/CR",
+                      "Batch No",
+                      "Transaction Date",
+                      "User ID",
+                      "Authoriser ID",
+                      "Status",
+                    ].map((col) => (
+                      <TableHead key={col}>{col}</TableHead>
+                    ))}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredGl.map((row, i) => (
+                    <TableRow key={i}>
+                      <TableCell>{row.BranchCode}</TableCell>
+                      <TableCell>{row.TransactionDescription}</TableCell>
+                      <TableCell>{row.AccountNumber}</TableCell>
+                      <TableCell>{row.AccountDescription}</TableCell>
+                      <TableCell>{row.CurrencyDrCr}</TableCell>
+                      <TableCell>{row.BatchNo}</TableCell>
+                      <TableCell>{row.TransactionDate}</TableCell>
+                      <TableCell>{row.UserID}</TableCell>
+                      <TableCell>{row.AuthoriserID}</TableCell>
+                      <TableCell>
+                        <Badge className={getStatusColor(row.Status)}>
+                          {row.Status}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
