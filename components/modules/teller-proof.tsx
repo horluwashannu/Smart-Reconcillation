@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Download, PlusCircle } from "lucide-react"
+import { Download, PlusCircle, Eye } from "lucide-react"
 import {
   Table,
   TableHeader,
@@ -33,7 +33,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from "@/components/ui/dialog"
 
 type TellerRow = {
@@ -63,15 +62,28 @@ export function TellerProof() {
   const [activeTab, setActiveTab] = useState<
     "teller_debit" | "teller_credit" | "gl_debit" | "gl_credit"
   >("teller_debit")
+
+  // Rows
   const [tellerRows, setTellerRows] = useState<TellerRow[]>([])
+  const [castRows, setCastRows] = useState<TellerRow[]>([{}])
   const [glRows, setGlRows] = useState<GLRow[]>([])
-  const [glFilterUser, setGlFilterUser] = useState("")
   const [filteredGl, setFilteredGl] = useState<GLRow[]>([])
-  const [viewMore, setViewMore] = useState(false)
-  const [buyTotal, setBuyTotal] = useState(0)
-  const [sellTotal, setSellTotal] = useState(0)
+  const [glFilterUser, setGlFilterUser] = useState("")
+
+  // Inputs
+  const [manualBuy, setManualBuy] = useState(0)
+  const [manualSell, setManualSell] = useState(0)
+
+  // Sums
+  const [tellerTotals, setTellerTotals] = useState({ buy: 0, sell: 0 })
+  const [castTotals, setCastTotals] = useState({ buy: 0, sell: 0 })
+  const [glTotals, setGlTotals] = useState({ total: 0 })
+  const [pendingGLTotal, setPendingGLTotal] = useState(0)
+
+  // UI
   const [openCast, setOpenCast] = useState(false)
-  const [castRows, setCastRows] = useState<TellerRow[]>([{ }]) // initial 1 row
+  const [openPendingGL, setOpenPendingGL] = useState(false)
+  const [viewMore, setViewMore] = useState(false)
 
   const safeNumber = (v: any) => {
     const s = String(v || "").replace(/[,₦$]/g, "").trim()
@@ -79,7 +91,7 @@ export function TellerProof() {
     return Number.isFinite(n) ? n : 0
   }
 
-  // --- GL File Parsing ---
+  // --- GL parsing ---
   const parseGL = async (file: File) => {
     try {
       const data = await file.arrayBuffer()
@@ -124,25 +136,58 @@ export function TellerProof() {
     XLSX.writeFile(wb, "TellerProofResult.xlsx")
   }
 
-  // --- Auto Totals ---
-  useEffect(() => {
-    const buy = tellerRows.reduce(
-      (sum, row) =>
-        sum +
-        safeNumber(row.WITHDRAWAL) +
-        safeNumber(row.TO_VAULT) +
-        safeNumber(row.EXPENSE) +
-        safeNumber(row.WUMT),
+  // --- Auto Sums ---
+  const recalcTotals = () => {
+    const tellerBuy = tellerRows.reduce(
+      (sum, r) => sum + safeNumber(r.DEPOSIT) + safeNumber(r.SAVINGS) + safeNumber(r.CHEQUES),
       0
     )
-    const sell = tellerRows.reduce(
-      (sum, row) =>
-        sum + safeNumber(row.DEPOSIT) + safeNumber(row.CHEQUES) + safeNumber(row.SAVINGS),
+    const tellerSell = tellerRows.reduce(
+      (sum, r) =>
+        sum + safeNumber(r.WITHDRAWAL) + safeNumber(r.TO_VAULT) + safeNumber(r.EXPENSE) + safeNumber(r.WUMT),
       0
     )
-    setBuyTotal(buy)
-    setSellTotal(sell)
-  }, [tellerRows])
+    setTellerTotals({ buy: tellerBuy, sell: tellerSell })
+
+    const castBuy = castRows.reduce(
+      (sum, r) => sum + safeNumber(r.DEPOSIT) + safeNumber(r.SAVINGS) + safeNumber(r.CHEQUES),
+      0
+    )
+    const castSell = castRows.reduce(
+      (sum, r) =>
+        sum + safeNumber(r.WITHDRAWAL) + safeNumber(r.TO_VAULT) + safeNumber(r.EXPENSE) + safeNumber(r.WUMT),
+      0
+    )
+    setCastTotals({ buy: castBuy, sell: castSell })
+
+    const glSum = glRows.reduce((sum, r) => sum + safeNumber(r.Amount), 0)
+    setGlTotals({ total: glSum })
+
+    const matchedAccounts = new Set([
+      ...tellerRows.map((r) => r.ACCOUNT_NO),
+      ...castRows.map((r) => r.ACCOUNT_NO),
+    ])
+    const pending = glRows
+      .filter((r) => !matchedAccounts.has(r.AccountNo))
+      .reduce((sum, r) => sum + safeNumber(r.Amount), 0)
+    setPendingGLTotal(pending)
+  }
+
+  useEffect(() => recalcTotals(), [tellerRows, castRows, glRows])
+
+  // --- CAST popup ---
+  const handleCastChange = (i: number, key: keyof TellerRow, value: any) => {
+    const newRows = [...castRows]
+    newRows[i][key] = value
+    setCastRows(newRows)
+  }
+  const addCastRow = () => setCastRows([...castRows, {}])
+  const saveCastRows = () => {
+    setTellerRows([...tellerRows, ...castRows])
+    setCastRows([{}])
+    setOpenCast(false)
+    alert("CAST rows added to Teller ✅")
+  }
 
   const currentData =
     activeTab === "teller_debit" || activeTab === "teller_credit"
@@ -150,40 +195,6 @@ export function TellerProof() {
       : filteredGl
 
   const displayData = viewMore ? currentData : currentData.slice(0, 15)
-
-  const handleCastChange = (i: number, key: keyof TellerRow, value: any) => {
-    const newRows = [...castRows]
-    newRows[i][key] = value
-    setCastRows(newRows)
-  }
-
-  const addCastRow = () => setCastRows([...castRows, {}])
-
-  const saveCastRows = () => {
-    const debitRows: TellerRow[] = []
-    const creditRows: TellerRow[] = []
-
-    castRows.forEach((r) => {
-      const row: TellerRow = {
-        CHEQUES: safeNumber(r.CHEQUES),
-        WITHDRAWAL: safeNumber(r.WITHDRAWAL),
-        ACCOUNT_NO: r.ACCOUNT_NO || "",
-        SAVINGS: safeNumber(r.SAVINGS),
-        DEPOSIT: safeNumber(r.DEPOSIT),
-        TO_VAULT: safeNumber(r.TO_VAULT),
-        EXPENSE: safeNumber(r.EXPENSE),
-        WUMT: safeNumber(r.WUMT),
-      }
-      const isCredit = row.DEPOSIT! + row.SAVINGS! + row.CHEQUES! > 0
-      if (isCredit) creditRows.push(row)
-      else debitRows.push(row)
-    })
-
-    setTellerRows([...tellerRows, ...debitRows, ...creditRows])
-    setOpenCast(false)
-    setCastRows([{}])
-    alert("CAST entries added ✅")
-  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-teal-100 dark:from-gray-900 dark:to-gray-800 p-6 text-gray-900 dark:text-gray-100">
@@ -198,27 +209,55 @@ export function TellerProof() {
           {/* Uploads */}
           <div className="grid md:grid-cols-2 gap-6">
             <div>
-              <Label>GL Sheet</Label>
+              <Label>CAST Upload</Label>
+              <Input type="file" accept=".xlsx,.xls,.csv" />
+            </div>
+            <div>
+              <Label>GL Upload</Label>
               <Input
                 type="file"
                 accept=".xlsx,.xls,.csv"
                 onChange={(e) => e.target.files?.[0] && parseGL(e.target.files[0])}
               />
               {glRows.length > 0 && (
-                <Badge className="mt-2 bg-blue-600">
-                  {glRows.length} GL Rows Loaded
-                </Badge>
+                <Badge className="mt-2 bg-blue-600">{glRows.length} GL Rows Loaded</Badge>
               )}
             </div>
           </div>
 
-          {/* Totals */}
+          {/* Manual Buy/Sell */}
           <div className="flex flex-wrap gap-6 mt-6">
-            <div className={`p-4 rounded-xl w-60 text-white font-bold text-center ${buyTotal >= 0 ? 'bg-green-600' : 'bg-red-600'}`}>
-              Total Buy (₦): {buyTotal.toLocaleString()}
+            <div>
+              <Label>Manual Buy (₦)</Label>
+              <Input
+                type="number"
+                value={manualBuy}
+                onChange={(e) => setManualBuy(safeNumber(e.target.value))}
+              />
             </div>
-            <div className={`p-4 rounded-xl w-60 text-white font-bold text-center ${sellTotal >= 0 ? 'bg-green-600' : 'bg-red-600'}`}>
-              Total Sell (₦): {sellTotal.toLocaleString()}
+            <div>
+              <Label>Manual Sell (₦)</Label>
+              <Input
+                type="number"
+                value={manualSell}
+                onChange={(e) => setManualSell(safeNumber(e.target.value))}
+              />
+            </div>
+          </div>
+
+          {/* Totals Footer */}
+          <div className="flex flex-wrap gap-4 mt-6">
+            <div className="p-4 rounded-xl w-60 text-white font-bold text-center bg-green-600">
+              Total Buy (₦): {(tellerTotals.buy + castTotals.buy + manualBuy).toLocaleString()}
+            </div>
+            <div className="p-4 rounded-xl w-60 text-white font-bold text-center bg-green-600">
+              Total Sell (₦): {(tellerTotals.sell + castTotals.sell + manualSell).toLocaleString()}
+            </div>
+            <div className="p-4 rounded-xl w-60 text-white font-bold text-center bg-yellow-600">
+              Pending GL (₦): {pendingGLTotal.toLocaleString()}
+            </div>
+            <div className="p-4 rounded-xl w-60 text-white font-bold text-center bg-blue-600">
+              Difference (₦): {(tellerTotals.buy + castTotals.buy + manualBuy) - pendingGLTotal}
             </div>
           </div>
 
@@ -230,7 +269,6 @@ export function TellerProof() {
               <TabsTrigger value="gl_debit">GL DEBIT</TabsTrigger>
               <TabsTrigger value="gl_credit">GL CREDIT</TabsTrigger>
             </TabsList>
-
             <TabsContent value={activeTab}>
               {activeTab.includes("gl") && (
                 <div className="flex flex-wrap gap-3 items-center justify-center mt-4">
@@ -281,58 +319,133 @@ export function TellerProof() {
             </TabsContent>
           </Tabs>
 
-          {/* CAST Popup */}
-          <div className="flex justify-center mt-6">
+          {/* CAST popup button */}
+          <div className="flex justify-between mt-6 flex-wrap gap-4">
             <Button onClick={() => setOpenCast(true)} className="bg-teal-600 text-white">
               <PlusCircle className="mr-2 h-4 w-4" /> Input CAST
             </Button>
+            <Button onClick={() => setOpenPendingGL(true)} className="bg-yellow-600 text-white">
+              <Eye className="mr-2 h-4 w-4" /> Preview Pending GL
+            </Button>
           </div>
 
+          {/* CAST popup */}
           <Dialog open={openCast} onOpenChange={setOpenCast}>
-            <DialogContent className="w-full max-w-[95vw] h-[80vh] overflow-auto">
+            <DialogContent className="w-full max-w-[98vw] h-[90vh] overflow-auto">
               <DialogHeader>
                 <DialogTitle>Input CAST (Excel-like)</DialogTitle>
               </DialogHeader>
 
-              <div className="overflow-auto max-h-[60vh]">
+              <div className="overflow-auto max-h-[70vh]">
                 <Table className="w-full border">
                   <TableHeader>
                     <TableRow>
-                      {["CHEQUES","WITHDRAWAL (₦)","ACCOUNT NO","SAVINGS (₦)","DEPOSIT (₦)","TO VAULT","EXPENSE","WUMT"].map(col => <TableHead key={col}>{col}</TableHead>)}
+                      {[
+                        "CHEQUES",
+                        "WITHDRAWAL (₦)",
+                        "ACCOUNT NO",
+                        "SAVINGS (₦)",
+                        "DEPOSIT (₦)",
+                        "TO VAULT",
+                        "EXPENSE",
+                        "WUMT",
+                      ].map((col) => (
+                        <TableHead key={col}>{col}</TableHead>
+                      ))}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {castRows.map((row, i) => (
                       <TableRow key={i}>
-                        {(["CHEQUES","WITHDRAWAL","ACCOUNT_NO","SAVINGS","DEPOSIT","TO_VAULT","EXPENSE","WUMT"] as (keyof TellerRow)[]).map((key,j) => (
+                        {(
+                          [
+                            "CHEQUES",
+                            "WITHDRAWAL",
+                            "ACCOUNT_NO",
+                            "SAVINGS",
+                            "DEPOSIT",
+                            "TO_VAULT",
+                            "EXPENSE",
+                            "WUMT",
+                          ] as (keyof TellerRow)[]
+                        ).map((key, j) => (
                           <TableCell key={j}>
                             <Input
                               value={row[key] || ""}
                               type={typeof row[key] === "number" ? "number" : "text"}
-                              onChange={(e) => handleCastChange(i,key,e.target.value)}
+                              onChange={(e) => handleCastChange(i, key, e.target.value)}
                               className="w-full"
                             />
                           </TableCell>
                         ))}
                       </TableRow>
                     ))}
+                    {/* CAST Footer Totals */}
+                    <TableRow className="bg-gray-200 dark:bg-gray-700 font-bold">
+                      <TableCell>Total</TableCell>
+                      <TableCell>{castRows.reduce((sum, r) => sum + safeNumber(r.WITHDRAWAL), 0)}</TableCell>
+                      <TableCell></TableCell>
+                      <TableCell>{castRows.reduce((sum, r) => sum + safeNumber(r.SAVINGS), 0)}</TableCell>
+                      <TableCell>{castRows.reduce((sum, r) => sum + safeNumber(r.DEPOSIT), 0)}</TableCell>
+                      <TableCell>{castRows.reduce((sum, r) => sum + safeNumber(r.TO_VAULT), 0)}</TableCell>
+                      <TableCell>{castRows.reduce((sum, r) => sum + safeNumber(r.EXPENSE), 0)}</TableCell>
+                      <TableCell>{castRows.reduce((sum, r) => sum + safeNumber(r.WUMT), 0)}</TableCell>
+                    </TableRow>
                   </TableBody>
                 </Table>
               </div>
 
-              <div className="flex justify-between mt-4">
-                <Button variant="outline" onClick={addCastRow}>Add Row</Button>
-                <Button className="bg-blue-600 text-white" onClick={saveCastRows}>Save & Show Proof</Button>
+              <div className="flex justify-end gap-4 mt-4">
+                <Button onClick={() => setOpenCast(false)} variant="outline">
+                  Cancel
+                </Button>
+                <Button onClick={saveCastRows} className="bg-teal-600 text-white">
+                  Save CAST
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          {/* Pending GL popup */}
+          <Dialog open={openPendingGL} onOpenChange={setOpenPendingGL}>
+            <DialogContent className="w-full max-w-[98vw] h-[90vh] overflow-auto">
+              <DialogHeader>
+                <DialogTitle>Pending GL Transactions</DialogTitle>
+              </DialogHeader>
+              <div className="overflow-auto max-h-[75vh]">
+                <Table className="w-full border">
+                  <TableHeader>
+                    <TableRow>
+                      {Object.keys(filteredGl[0] || {}).map((col) => (
+                        <TableHead key={col}>{col}</TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredGl
+                      .filter(
+                        (r) =>
+                          ![...tellerRows, ...castRows].map((x) => x.ACCOUNT_NO).includes(r.AccountNo)
+                      )
+                      .map((row, i) => (
+                        <TableRow key={i}>
+                          {Object.values(row).map((val, j) => (
+                            <TableCell key={j}>{String(val)}</TableCell>
+                          ))}
+                        </TableRow>
+                      ))}
+                  </TableBody>
+                </Table>
+              </div>
+              <div className="flex justify-end mt-4">
+                <Button onClick={() => setOpenPendingGL(false)}>Close</Button>
               </div>
             </DialogContent>
           </Dialog>
 
           {/* Actions */}
           <div className="flex justify-center gap-4 mt-8 flex-wrap">
-            <Button
-              onClick={handleExport}
-              className="bg-gradient-to-r from-blue-600 to-teal-500 text-white"
-            >
+            <Button onClick={handleExport} className="bg-gradient-to-r from-blue-600 to-teal-500 text-white">
               <Download className="mr-2 h-4 w-4" /> Export Result
             </Button>
             <Button variant="outline" onClick={() => alert("Submitted Successfully ✅")}>
