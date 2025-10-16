@@ -1,276 +1,300 @@
-"use client";
+"use client"
 
-import React, { useState } from "react";
-import * as XLSX from "xlsx";
+import { useState } from "react"
+import * as XLSX from "xlsx"
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Label } from "@/components/ui/label"
+import { Input } from "@/components/ui/input"
+import { Badge } from "@/components/ui/badge"
+import { Download } from "lucide-react"
+import {
+  Table,
+  TableHeader,
+  TableRow,
+  TableHead,
+  TableBody,
+  TableCell,
+} from "@/components/ui/table"
 
-export default function TellerProof() {
-  const [tellerData, setTellerData] = useState<any[]>([]);
-  const [glData, setGLData] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState("upload");
-  const [matched, setMatched] = useState<any[]>([]);
-  const [unmatchedTeller, setUnmatchedTeller] = useState<any[]>([]);
-  const [unmatchedGL, setUnmatchedGL] = useState<any[]>([]);
+type TellerRow = {
+  ACCOUNT_NO?: string
+  OPENING_BALANCE?: number
+  CASH_DEP?: number
+  CASH_DEP_2?: number
+  SAVINGS_WITHDR?: number
+  TO_VAULT?: number
+  FROM_VAULT?: number
+  EXPENSE?: number
+  WUMT?: number
+  Column1?: string
+}
 
-  // Read and convert Excel to JSON
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: string) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      const data = evt.target?.result;
-      const workbook = XLSX.read(data, { type: "binary" });
-      const sheetName = workbook.SheetNames[1] || workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
-      const json = XLSX.utils.sheet_to_json(sheet);
-      if (type === "teller") setTellerData(json);
-      else setGLData(json);
-    };
-    reader.readAsBinaryString(file);
-  };
+type GLRow = {
+  Date?: string
+  Branch?: string
+  AccountNo?: string
+  Type?: string
+  Currency?: string
+  Amount?: number
+  User?: string
+  Authorizer?: string
+  Reference?: string
+}
 
-  // Matching logic (Account Number + Amount)
-  const reconcile = () => {
-    const matches: any[] = [];
-    const unmatchedT: any[] = [];
-    const unmatchedG = [...glData];
+export function TellerProof() {
+  const [activeTab, setActiveTab] = useState<
+    "teller_debit" | "teller_credit" | "gl_debit" | "gl_credit"
+  >("teller_debit")
+  const [tellerRows, setTellerRows] = useState<TellerRow[]>([])
+  const [glRows, setGlRows] = useState<GLRow[]>([])
+  const [tellerName, setTellerName] = useState("")
+  const [supervisorName, setSupervisorName] = useState("")
+  const [glFilterUser, setGlFilterUser] = useState("")
+  const [filteredGl, setFilteredGl] = useState<GLRow[]>([])
 
-    tellerData.forEach((tRow) => {
-      const tAcc = (tRow["ACCOUNT NO"] || tRow["Account Number"] || "").toString().trim();
-      const tAmt = Number(tRow["SAVINGS WITHDR."] || tRow["LCY AMOUNT"] || tRow["Amount"] || 0);
+  const safeNumber = (v: any) => {
+    const s = String(v || "").replace(/[,₦$]/g, "").trim()
+    const n = Number(s)
+    return Number.isFinite(n) ? n : 0
+  }
 
-      const gIndex = unmatchedG.findIndex((gRow) => {
-        const gAcc = (gRow["ACCOUNT NUMBER"] || gRow["Account Number"] || "").toString().trim();
-        const gAmt = Number(gRow["LCY AMOUNT"] || gRow["Amount"] || 0);
-        return tAcc === gAcc && tAmt === gAmt;
-      });
+  const findCastSheet = (wb: XLSX.WorkBook) => {
+    const found = wb.SheetNames.find(
+      (n) => n.toLowerCase().trim() === "cast"
+    )
+    return found ? wb.Sheets[found] : wb.Sheets[wb.SheetNames[0]]
+  }
 
-      if (gIndex >= 0) {
-        matches.push({ ...tRow, matchedWith: unmatchedG[gIndex] });
-        unmatchedG.splice(gIndex, 1);
-      } else unmatchedT.push(tRow);
-    });
+  const parseTeller = async (file: File) => {
+    try {
+      const data = await file.arrayBuffer()
+      const wb = XLSX.read(data, { type: "array" })
+      const sheet = findCastSheet(wb)
+      const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })
+      const header = raw[0].map((h) => String(h || "").trim())
+      const rows = raw.slice(1).map((r) => {
+        const obj: any = {}
+        header.forEach((h, i) => {
+          obj[h.replace(/\s+/g, "_").toUpperCase()] = r[i]
+        })
+        return {
+          ACCOUNT_NO:
+            obj["ACCOUNT_NO"] || obj["ACCOUNT"] || obj["ACCOUNTNUMBER"],
+          OPENING_BALANCE: safeNumber(obj["OPENING_BALANCE"]),
+          CASH_DEP: safeNumber(obj["CASH_DEP"]),
+          CASH_DEP_2: safeNumber(obj["CASH_DEP_2"]),
+          SAVINGS_WITHDR: safeNumber(obj["SAVINGS_WITHDR"]),
+          TO_VAULT: safeNumber(obj["TO_VAULT"]),
+          FROM_VAULT: safeNumber(obj["FROM_VAULT"]),
+          EXPENSE: safeNumber(obj["EXPENSE"]),
+          WUMT: safeNumber(obj["WUMT"]),
+          Column1: obj["NARRATION"] || "",
+        }
+      })
+      setTellerRows(rows.filter((r) => r.ACCOUNT_NO))
+    } catch {
+      alert("Invalid Teller (CAST) file or missing 'cast' sheet.")
+    }
+  }
 
-    setMatched(matches);
-    setUnmatchedTeller(unmatchedT);
-    setUnmatchedGL(unmatchedG);
-    setActiveTab("reconcile");
-  };
+  const parseGL = async (file: File) => {
+    try {
+      const data = await file.arrayBuffer()
+      const wb = XLSX.read(data, { type: "array" })
+      const sheet = wb.Sheets[wb.SheetNames[0]]
+      const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })
+      const header = raw[0].map((h) => String(h || "").trim().toLowerCase())
+      const rows = raw.slice(1).map((r) => ({
+        Date: String(r[header.findIndex((h) => h.includes("transaction date"))] || ""),
+        Branch: String(r[header.findIndex((h) => h.includes("branch"))] || ""),
+        AccountNo: String(r[header.findIndex((h) => h.includes("account"))] || ""),
+        Type: String(r[header.findIndex((h) => h.includes("dr/cr"))] || ""),
+        Currency: String(r[header.findIndex((h) => h.includes("currency"))] || ""),
+        Amount: safeNumber(
+          r[header.findIndex((h) => h.includes("lcy amount") || h.includes("amount"))]
+        ),
+        User: String(r[header.findIndex((h) => h.includes("user"))] || ""),
+        Authorizer: String(r[header.findIndex((h) => h.includes("authoriser"))] || ""),
+        Reference: String(r[header.findIndex((h) => h.includes("reference"))] || ""),
+      }))
+      setGlRows(rows.filter((r) => r.AccountNo))
+      setFilteredGl(rows.filter((r) => r.AccountNo))
+    } catch {
+      alert("Invalid GL file format.")
+    }
+  }
 
-  // Export helper
-  const exportToExcel = () => {
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(matched), "Matched");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(unmatchedTeller), "Unmatched Teller");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(unmatchedGL), "Unmatched GL");
-    XLSX.writeFile(wb, "reconciliation_result.xlsx");
-  };
+  const handleFilter = () => {
+    if (!glFilterUser.trim()) {
+      setFilteredGl(glRows)
+    } else {
+      const filtered = glRows.filter((r) =>
+        r.User?.toLowerCase().includes(glFilterUser.toLowerCase())
+      )
+      setFilteredGl(filtered)
+    }
+  }
 
-  const SummaryCard = ({ title, value, color }: any) => (
-    <div className={`rounded-2xl shadow p-4 text-center text-white ${color}`}>
-      <h3 className="text-sm opacity-80">{title}</h3>
-      <p className="text-2xl font-bold">{value}</p>
-    </div>
-  );
+  const handleExport = () => {
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(
+      wb,
+      XLSX.utils.json_to_sheet(tellerRows),
+      "Teller"
+    )
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(glRows), "GL")
+    XLSX.writeFile(wb, "TellerProofResult.xlsx")
+  }
+
+  // --- Select rows for preview ---
+  const currentData =
+    activeTab === "teller_debit" || activeTab === "teller_credit"
+      ? tellerRows
+      : filteredGl
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      {/* Header */}
-      <div className="bg-gradient-to-r from-blue-500 to-teal-400 text-white rounded-xl p-4 shadow mb-6">
-        <h1 className="text-2xl font-bold">Smart Teller ↔ GL Reconciliation</h1>
-        <p className="opacity-80 text-sm">Upload Teller & GL Sheets, Preview, and Match Automatically</p>
-      </div>
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-teal-100 p-6">
+      <Card className="max-w-7xl mx-auto shadow-xl border-none rounded-2xl">
+        <CardHeader className="bg-gradient-to-r from-blue-600 to-teal-500 text-white rounded-t-2xl p-6">
+          <CardTitle className="text-2xl font-bold">Teller Proof Dashboard</CardTitle>
+          <CardDescription className="text-blue-100">
+            Upload Teller & GL files for reconciliation and preview below
+          </CardDescription>
+        </CardHeader>
 
-      {/* Tabs */}
-      <div className="flex gap-2 mb-4">
-        {[
-          ["upload", "Upload Files"],
-          ["preview", "Preview Data"],
-          ["reconcile", "Reconciliation"],
-        ].map(([key, label]) => (
-          <button
-            key={key}
-            onClick={() => setActiveTab(key)}
-            className={`px-4 py-2 rounded-full text-sm font-medium transition ${
-              activeTab === key
-                ? "bg-teal-500 text-white shadow"
-                : "bg-white border border-gray-200 text-gray-700"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {/* Upload Tab */}
-      {activeTab === "upload" && (
-        <div className="grid md:grid-cols-2 gap-4">
-          <div className="p-4 bg-white rounded-xl shadow">
-            <h2 className="font-semibold mb-2">Upload Teller Sheet</h2>
-            <input type="file" accept=".xlsx,.csv" onChange={(e) => handleFileUpload(e, "teller")} />
+        <CardContent className="p-6 space-y-6">
+          {/* Uploaders */}
+          <div className="grid md:grid-cols-2 gap-6">
+            <div>
+              <Label>Teller (CAST) Sheet</Label>
+              <Input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                onChange={(e) =>
+                  e.target.files?.[0] && parseTeller(e.target.files[0])
+                }
+              />
+              {tellerRows.length > 0 && (
+                <Badge className="mt-2 bg-green-600">
+                  {tellerRows.length} Teller Rows Loaded
+                </Badge>
+              )}
+            </div>
+            <div>
+              <Label>GL Sheet</Label>
+              <Input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                onChange={(e) => e.target.files?.[0] && parseGL(e.target.files[0])}
+              />
+              {glRows.length > 0 && (
+                <Badge className="mt-2 bg-blue-600">
+                  {glRows.length} GL Rows Loaded
+                </Badge>
+              )}
+            </div>
           </div>
-          <div className="p-4 bg-white rounded-xl shadow">
-            <h2 className="font-semibold mb-2">Upload GL Sheet</h2>
-            <input type="file" accept=".xlsx,.csv" onChange={(e) => handleFileUpload(e, "gl")} />
-          </div>
-          <button
-            onClick={reconcile}
-            disabled={!tellerData.length || !glData.length}
-            className="mt-4 bg-teal-500 text-white px-6 py-2 rounded-lg shadow hover:bg-teal-600"
-          >
-            Run Reconciliation
-          </button>
-        </div>
-      )}
 
-      {/* Preview Tab */}
-      {activeTab === "preview" && (
-        <div className="grid md:grid-cols-2 gap-4">
-          {[{ title: "Teller Data", data: tellerData }, { title: "GL Data", data: glData }].map(
-            ({ title, data }) => (
-              <div key={title} className="bg-white rounded-xl shadow p-4">
-                <h2 className="font-semibold mb-3">{title}</h2>
-                <div className="overflow-x-auto max-h-[400px]">
-                  <table className="min-w-full text-sm border">
-                    <thead className="bg-gray-100 sticky top-0">
-                      <tr>
-                        {data[0] &&
-                          Object.keys(data[0]).map((key) => (
-                            <th key={key} className="p-2 border text-left">
-                              {key}
-                            </th>
-                          ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {data.map((row, i) => (
-                        <tr key={i} className="odd:bg-gray-50 even:bg-white">
-                          {Object.values(row).map((val: any, j) => (
-                            <td key={j} className="p-2 border truncate max-w-[180px]">
-                              {val?.toString()}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )
+          {/* Tabs */}
+          <div className="flex flex-wrap justify-center gap-3 mt-6">
+            {["teller_debit", "teller_credit", "gl_debit", "gl_credit"].map(
+              (tab) => (
+                <Button
+                  key={tab}
+                  variant={activeTab === tab ? "default" : "outline"}
+                  onClick={() => setActiveTab(tab as any)}
+                >
+                  {tab.replace("_", " ").toUpperCase()}
+                </Button>
+              )
+            )}
+          </div>
+
+          {/* GL Filter */}
+          {activeTab.includes("gl") && (
+            <div className="flex flex-wrap gap-3 items-center justify-center mt-4">
+              <Input
+                placeholder="Filter by User ID"
+                value={glFilterUser}
+                onChange={(e) => setGlFilterUser(e.target.value)}
+                className="w-60"
+              />
+              <Button onClick={handleFilter}>Filter</Button>
+            </div>
           )}
-        </div>
-      )}
 
-      {/* Reconciliation Tab */}
-      {activeTab === "reconcile" && (
-        <div className="space-y-6">
-          {/* Summary */}
-          <div className="grid sm:grid-cols-3 gap-4">
-            <SummaryCard title="Matched Records" value={matched.length} color="bg-green-500" />
-            <SummaryCard title="Unmatched Teller" value={unmatchedTeller.length} color="bg-orange-500" />
-            <SummaryCard title="Unmatched GL" value={unmatchedGL.length} color="bg-red-500" />
-          </div>
-
-          {/* Matched Table */}
-          <div className="bg-white p-4 rounded-xl shadow">
-            <h2 className="font-semibold mb-2 text-green-700">Matched Entries</h2>
-            <div className="overflow-x-auto max-h-[350px]">
-              <table className="min-w-full text-sm border">
-                <thead className="bg-green-50 sticky top-0">
-                  <tr>
-                    {matched[0] &&
-                      Object.keys(matched[0]).map((key) => (
-                        <th key={key} className="p-2 border text-left">
-                          {key}
-                        </th>
-                      ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {matched.map((row, i) => (
-                    <tr key={i} className="odd:bg-green-50 even:bg-green-100">
-                      {Object.values(row).map((val: any, j) => (
-                        <td key={j} className="p-2 border truncate max-w-[200px]">
-                          {val?.toString()}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          {/* Teller & Supervisor */}
+          <div className="grid md:grid-cols-2 gap-4 mt-6">
+            <div>
+              <Label>Teller Name</Label>
+              <Input
+                placeholder="Enter Teller Name"
+                value={tellerName}
+                onChange={(e) => setTellerName(e.target.value)}
+              />
+            </div>
+            <div>
+              <Label>Supervisor Name</Label>
+              <Input
+                placeholder="Enter Supervisor Name"
+                value={supervisorName}
+                onChange={(e) => setSupervisorName(e.target.value)}
+              />
             </div>
           </div>
 
-          {/* Unmatched Teller */}
-          <div className="bg-white p-4 rounded-xl shadow">
-            <h2 className="font-semibold mb-2 text-orange-700">Unmatched Teller Entries</h2>
-            <div className="overflow-x-auto max-h-[350px]">
-              <table className="min-w-full text-sm border">
-                <thead className="bg-orange-50 sticky top-0">
-                  <tr>
-                    {unmatchedTeller[0] &&
-                      Object.keys(unmatchedTeller[0]).map((key) => (
-                        <th key={key} className="p-2 border text-left">
-                          {key}
-                        </th>
+          {/* Preview Table */}
+          {currentData.length > 0 && (
+            <div className="overflow-auto border rounded-xl bg-white shadow-inner mt-6">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    {Object.keys(currentData[0])
+                      .slice(0, 8)
+                      .map((key) => (
+                        <TableHead key={key}>{key}</TableHead>
                       ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {unmatchedTeller.map((row, i) => (
-                    <tr key={i} className="odd:bg-orange-50 even:bg-orange-100">
-                      {Object.values(row).map((val: any, j) => (
-                        <td key={j} className="p-2 border truncate max-w-[200px]">
-                          {val?.toString()}
-                        </td>
-                      ))}
-                    </tr>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {currentData.slice(0, 10).map((row, i) => (
+                    <TableRow key={i}>
+                      {Object.values(row)
+                        .slice(0, 8)
+                        .map((val, j) => (
+                          <TableCell key={j}>{String(val)}</TableCell>
+                        ))}
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
-          </div>
+          )}
 
-          {/* Unmatched GL */}
-          <div className="bg-white p-4 rounded-xl shadow">
-            <h2 className="font-semibold mb-2 text-red-700">Unmatched GL Entries</h2>
-            <div className="overflow-x-auto max-h-[350px]">
-              <table className="min-w-full text-sm border">
-                <thead className="bg-red-50 sticky top-0">
-                  <tr>
-                    {unmatchedGL[0] &&
-                      Object.keys(unmatchedGL[0]).map((key) => (
-                        <th key={key} className="p-2 border text-left">
-                          {key}
-                        </th>
-                      ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {unmatchedGL.map((row, i) => (
-                    <tr key={i} className="odd:bg-red-50 even:bg-red-100">
-                      {Object.values(row).map((val: any, j) => (
-                        <td key={j} className="p-2 border truncate max-w-[200px]">
-                          {val?.toString()}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Export Button */}
-          <div className="text-right">
-            <button
-              onClick={exportToExcel}
-              className="bg-blue-500 text-white px-6 py-2 rounded-lg shadow hover:bg-blue-600"
+          {/* Actions */}
+          <div className="flex justify-center gap-4 mt-8 flex-wrap">
+            <Button
+              onClick={handleExport}
+              className="bg-gradient-to-r from-blue-600 to-teal-500 text-white"
             >
-              Export Result
-            </button>
+              <Download className="mr-2 h-4 w-4" /> Export Result
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => alert("Submitted Successfully ✅")}
+            >
+              Dummy Submit
+            </Button>
           </div>
-        </div>
-      )}
+        </CardContent>
+      </Card>
     </div>
-  );
+  )
 }
