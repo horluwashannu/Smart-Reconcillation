@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Download } from "lucide-react"
+import { Download, PlusCircle } from "lucide-react"
 import {
   Table,
   TableHeader,
@@ -28,6 +28,13 @@ import {
   TabsTrigger,
   TabsContent,
 } from "@/components/ui/tabs"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog"
 
 type TellerRow = {
   ACCOUNT_NO?: string
@@ -39,7 +46,8 @@ type TellerRow = {
   FROM_VAULT?: number
   EXPENSE?: number
   WUMT?: number
-  Column1?: string
+  CHEQUES?: number
+  ACCOUNT_NO2?: string
 }
 
 type GLRow = {
@@ -65,6 +73,22 @@ export function TellerProof() {
   const [glFilterUser, setGlFilterUser] = useState("")
   const [filteredGl, setFilteredGl] = useState<GLRow[]>([])
   const [viewMore, setViewMore] = useState(false)
+  const [buyTotal, setBuyTotal] = useState(0)
+  const [sellTotal, setSellTotal] = useState(0)
+  const [openCast, setOpenCast] = useState(false)
+  const [castData, setCastData] = useState<any>({
+    CHEQUES: "",
+    ACCOUNT_NO: "",
+    SAVINGS_WITHDR: "",
+    ACCOUNT_NO2: "",
+    TO_VAULT: "",
+    EXPENSE: "",
+    WUMT: "",
+    OPENING_BALANCE: "",
+    CASH_DEP: "",
+    CASH_DEP_2: "",
+    FROM_VAULT: "",
+  })
 
   const safeNumber = (v: any) => {
     const s = String(v || "").replace(/[,₦$]/g, "").trim()
@@ -101,7 +125,6 @@ export function TellerProof() {
           FROM_VAULT: safeNumber(obj["FROM_VAULT"]),
           EXPENSE: safeNumber(obj["EXPENSE"]),
           WUMT: safeNumber(obj["WUMT"]),
-          Column1: obj["NARRATION"] || "",
         }
       })
       setTellerRows(rows.filter((r) => r.ACCOUNT_NO))
@@ -154,6 +177,31 @@ export function TellerProof() {
     XLSX.writeFile(wb, "TellerProofResult.xlsx")
   }
 
+  const handleCastSubmit = () => {
+    const newRow: TellerRow = {
+      ...castData,
+      OPENING_BALANCE: safeNumber(castData.OPENING_BALANCE),
+      CASH_DEP: safeNumber(castData.CASH_DEP),
+      CASH_DEP_2: safeNumber(castData.CASH_DEP_2),
+      SAVINGS_WITHDR: safeNumber(castData.SAVINGS_WITHDR),
+      TO_VAULT: safeNumber(castData.TO_VAULT),
+      FROM_VAULT: safeNumber(castData.FROM_VAULT),
+      EXPENSE: safeNumber(castData.EXPENSE),
+      WUMT: safeNumber(castData.WUMT),
+      CHEQUES: safeNumber(castData.CHEQUES),
+    }
+
+    const isCredit =
+      safeNumber(castData.CASH_DEP) > 0 ||
+      safeNumber(castData.CASH_DEP_2) > 0 ||
+      safeNumber(castData.FROM_VAULT) > 0
+
+    const updated = [...tellerRows, newRow]
+    setTellerRows(updated)
+    setOpenCast(false)
+    alert(isCredit ? "Added to Teller Credit ✅" : "Added to Teller Debit ✅")
+  }
+
   const currentData =
     activeTab === "teller_debit" || activeTab === "teller_credit"
       ? tellerRows
@@ -161,13 +209,25 @@ export function TellerProof() {
 
   const displayData = viewMore ? currentData : currentData.slice(0, 15)
 
+  const numericKeys = currentData.length
+    ? Object.keys(currentData[0]).filter((k) => typeof (currentData[0] as any)[k] === "number")
+    : []
+
+  const totals: Record<string, number> = {}
+  numericKeys.forEach((k) => {
+    totals[k] = currentData.reduce(
+      (sum, row) => sum + safeNumber((row as any)[k]),
+      0
+    )
+  })
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-teal-100 p-6">
-      <Card className="max-w-7xl mx-auto shadow-xl border-none rounded-2xl">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-teal-100 dark:from-gray-900 dark:to-gray-800 p-6 text-gray-900 dark:text-gray-100">
+      <Card className="w-full mx-auto shadow-xl border-none rounded-2xl bg-white dark:bg-gray-900">
         <CardHeader className="bg-gradient-to-r from-blue-600 to-teal-500 text-white rounded-t-2xl p-6">
           <CardTitle className="text-2xl font-bold">Teller Proof Dashboard</CardTitle>
           <CardDescription className="text-blue-100">
-            Upload Teller & GL files for reconciliation and preview below
+            Upload or Input Teller & GL files for reconciliation and preview
           </CardDescription>
         </CardHeader>
 
@@ -207,13 +267,14 @@ export function TellerProof() {
 
           {/* Tabs */}
           <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)}>
-            <TabsList className="flex flex-wrap justify-center gap-3 mt-6">
+            <TabsList className="grid grid-cols-4 w-full mt-6">
               <TabsTrigger value="teller_debit">TELLER DEBIT</TabsTrigger>
               <TabsTrigger value="teller_credit">TELLER CREDIT</TabsTrigger>
               <TabsTrigger value="gl_debit">GL DEBIT</TabsTrigger>
               <TabsTrigger value="gl_credit">GL CREDIT</TabsTrigger>
             </TabsList>
 
+            {/* Each Tab Content */}
             {["teller_debit", "teller_credit", "gl_debit", "gl_credit"].map((tab) => (
               <TabsContent key={tab} value={tab}>
                 {/* GL Filter */}
@@ -229,7 +290,7 @@ export function TellerProof() {
                   </div>
                 )}
 
-                {/* Teller & Supervisor */}
+                {/* Teller Info */}
                 <div className="grid md:grid-cols-2 gap-4 mt-6">
                   <div>
                     <Label>Teller Name</Label>
@@ -249,10 +310,30 @@ export function TellerProof() {
                   </div>
                 </div>
 
+                {/* Buy/Sell Inputs */}
+                <div className="grid md:grid-cols-2 gap-4 mt-6">
+                  <div>
+                    <Label>Total Buy</Label>
+                    <Input
+                      type="number"
+                      value={buyTotal}
+                      onChange={(e) => setBuyTotal(Number(e.target.value))}
+                    />
+                  </div>
+                  <div>
+                    <Label>Total Sell</Label>
+                    <Input
+                      type="number"
+                      value={sellTotal}
+                      onChange={(e) => setSellTotal(Number(e.target.value))}
+                    />
+                  </div>
+                </div>
+
                 {/* Preview */}
                 {currentData.length > 0 && (
-                  <div className="overflow-auto border rounded-xl bg-white shadow-inner mt-6 max-h-[500px]">
-                    <Table>
+                  <div className="overflow-auto border rounded-xl bg-white dark:bg-gray-800 shadow-inner mt-6 max-h-[500px] w-full">
+                    <Table className="w-full">
                       <TableHeader>
                         <TableRow>
                           {Object.keys(currentData[0])
@@ -277,6 +358,20 @@ export function TellerProof() {
                   </div>
                 )}
 
+                {/* Totals */}
+                {Object.keys(totals).length > 0 && (
+                  <div className="mt-4 bg-gray-50 dark:bg-gray-700 p-4 rounded-lg">
+                    <h4 className="font-semibold mb-2">Auto Totals:</h4>
+                    <div className="grid md:grid-cols-3 gap-3 text-sm">
+                      {Object.entries(totals).map(([k, v]) => (
+                        <div key={k}>
+                          <strong>{k}</strong>: {v.toLocaleString()}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {currentData.length > 15 && (
                   <div className="flex justify-center mt-4">
                     <Button
@@ -290,6 +385,42 @@ export function TellerProof() {
               </TabsContent>
             ))}
           </Tabs>
+
+          {/* Cast Input Popup */}
+          <div className="flex justify-center mt-6">
+            <Button onClick={() => setOpenCast(true)} className="bg-teal-600 text-white">
+              <PlusCircle className="mr-2 h-4 w-4" /> Input Cast Directly
+            </Button>
+          </div>
+
+          <Dialog open={openCast} onOpenChange={setOpenCast}>
+            <DialogContent className="sm:max-w-[600px]">
+              <DialogHeader>
+                <DialogTitle>Input Teller Cast</DialogTitle>
+              </DialogHeader>
+
+              <div className="grid grid-cols-2 gap-3 mt-4">
+                {Object.keys(castData).map((field) => (
+                  <div key={field}>
+                    <Label>{field.replace(/_/g, " ")}</Label>
+                    <Input
+                      type="text"
+                      value={castData[field]}
+                      onChange={(e) =>
+                        setCastData({ ...castData, [field]: e.target.value })
+                      }
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <DialogFooter className="mt-6">
+                <Button onClick={handleCastSubmit} className="bg-blue-600 text-white">
+                  OK
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
 
           {/* Actions */}
           <div className="flex justify-center gap-4 mt-8 flex-wrap">
