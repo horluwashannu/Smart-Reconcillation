@@ -1,685 +1,626 @@
 // /components/TellerGLReconciliation.tsx
-"use client";
+"use client"
 
-import React, { useMemo, useState } from "react";
-import * as XLSX from "xlsx";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-} from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Download, Upload, CheckCircle2, AlertTriangle } from "lucide-react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Badge } from "@/components/ui/badge";
-import { BranchInfo } from "@/components/branch-info";
+import React, { useEffect, useMemo, useState } from "react"
+import * as XLSX from "xlsx"
+import { Upload, FileSpreadsheet, Download, CheckCircle, AlertTriangle } from "lucide-react"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table"
+import { Badge } from "@/components/ui/badge"
+import { BranchInfo } from "@/components/branch-info"
 
-type TellerRow = {
-  id: string;
-  ACCOUNT_NO?: string;
-  NARRATION?: string;
-  CHEQUES?: number;
-  SAVINGS_WITHDR?: number;
-  TO_VAULT?: number;
-  EXPENSE?: number;
-  WUMT?: number;
-  OPENING_BALANCE?: number;
-  CASH_DEP?: number;
-  CASH_DEP_2?: number;
-  FROM_VAULT?: number;
-  // meta
-  side?: "debit" | "credit";
-  matched?: boolean;
-  matchKey?: string;
-  raw?: any;
-};
+type TellerRawRow = Record<string, any>
+type GLRawRow = Record<string, any>
 
-type GLRow = {
-  id: string;
-  Date?: string;
-  Branch?: string;
-  AccountNo?: string;
-  Type?: string; // D / C
-  Currency?: string;
-  Amount?: number;
-  User?: string;
-  Authorizer?: string;
-  Reference?: string;
-  matched?: boolean;
-  matchKey?: string;
-  raw?: any;
-};
+type NormalizedRow = {
+  id: string
+  source: "teller" | "gl"
+  side: "debit" | "credit"
+  account: string
+  amount: number
+  currency?: string
+  date?: string
+  narration?: string
+  user?: string
+  authorizer?: string
+  reference?: string
+  matched?: boolean
+  raw?: any
+}
 
 export default function TellerGLReconciliation() {
-  // meta
-  const [branchCode, setBranchCode] = useState("");
-  const [branchName, setBranchName] = useState("");
-  const [country, setCountry] = useState("");
+  // Branch / meta
+  const [branchCode, setBranchCode] = useState("")
+  const [branchName, setBranchName] = useState("")
+  const [country, setCountry] = useState("")
 
-  // uploader states
-  const [tellerFileName, setTellerFileName] = useState<string | null>(null);
-  const [glFileName, setGlFileName] = useState<string | null>(null);
+  // Upload files
+  const [tellerFile, setTellerFile] = useState<File | null>(null)
+  const [glFile, setGlFile] = useState<File | null>(null)
 
-  // parsed data
-  const [tellerRows, setTellerRows] = useState<TellerRow[]>([]);
-  const [glRows, setGlRows] = useState<GLRow[]>([]);
+  // Parsed raw arrays
+  const [tellerRaw, setTellerRaw] = useState<TellerRawRow[]>([])
+  const [glRaw, setGlRaw] = useState<GLRawRow[]>([])
 
-  // UI
+  // Normalized lists (split debit/credit entries)
+  const [tellerNormalized, setTellerNormalized] = useState<NormalizedRow[]>([])
+  const [glNormalized, setGlNormalized] = useState<NormalizedRow[]>([])
+
+  // UI & inputs
   const [activeTab, setActiveTab] = useState<
     "teller_debit" | "teller_credit" | "gl_debit" | "gl_credit"
-  >("teller_debit");
-  const [tellerName, setTellerName] = useState("");
-  const [supervisorName, setSupervisorName] = useState("");
-  const [glFilterUser, setGlFilterUser] = useState("");
+  >("teller_debit")
+  const [tellerName, setTellerName] = useState("")
+  const [supervisorName, setSupervisorName] = useState("")
+  const [openingBalance, setOpeningBalance] = useState<number | "">("")
+  const [buyAmount, setBuyAmount] = useState<number | "">("") // amount teller bought (remove from till)
+  const [sellAmount, setSellAmount] = useState<number | "">("") // amount teller sold (add to till)
+  const [previewLimit, setPreviewLimit] = useState(200)
 
-  // small helper: robust number parse (digit-by-digit)
+  // Helpers
   const safeNumber = (v: any) => {
-    if (v === null || v === undefined || v === "") return 0;
-    const s = String(v).replace(/[,₦€$]/g, "").trim();
-    const n = Number(s);
-    return Number.isFinite(n) ? n : 0;
-  };
+    if (v === null || v === undefined || v === "") return 0
+    const s = String(v).replace(/[,\s₦$€£]/g, "").trim()
+    const n = Number(s)
+    return Number.isFinite(n) ? n : 0
+  }
 
-  // find 'cast' sheet or fallback
+  // Try to find sheet named "cast" or use first sheet
   const findCastSheet = (wb: XLSX.WorkBook) => {
-    const found = wb.SheetNames.find((n) => n.toLowerCase().trim() === "cast");
-    if (found) return wb.Sheets[found];
-    if (wb.SheetNames.length >= 2) return wb.Sheets[wb.SheetNames[1]];
-    return wb.Sheets[wb.SheetNames[0]];
-  };
+    const found = wb.SheetNames.find((n) => n.toLowerCase().trim() === "cast")
+    if (found) return wb.Sheets[found]
+    if (wb.SheetNames.length >= 2) return wb.Sheets[wb.SheetNames[1]]
+    return wb.Sheets[wb.SheetNames[0]]
+  }
 
-  // parse teller (expects columns like the ones you gave)
-  const parseTellerFile = async (file: File) => {
+  // Generic parse helper (returns array of row objects)
+  const parseWorkbookToJson = (wb: XLSX.WorkBook, preferCast = false) => {
+    const sheet = preferCast ? findCastSheet(wb) : wb.Sheets[wb.SheetNames[0]]
+    const raw = XLSX.utils.sheet_to_json(sheet, { defval: "" }) as any[]
+    return raw
+  }
+
+  // Teller parse (expects columns like: CHEQUES, ACCOUNT NO, SAVINGS WITHDR., ACCOUNT NO2, TO VAULT, EXPENSE, WUMT, Column1, OPENING BALANCE, CASH DEP, CASH DEP 2, FROM VAULT)
+  const handleTellerUpload = async (file: File) => {
+    setTellerFile(file)
     try {
-      const ab = await file.arrayBuffer();
-      const wb = XLSX.read(ab, { type: "array", cellDates: true });
-      const sheet = findCastSheet(wb);
-      const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" }) as any[][];
-      if (!raw || raw.length === 0) {
-        alert("Teller file appears empty.");
-        return;
+      const data = await file.arrayBuffer()
+      const wb = XLSX.read(data, { type: "array", cellDates: true })
+      const raw = parseWorkbookToJson(wb, true)
+      setTellerRaw(raw)
+      // normalize immediately
+      const norm = normalizeTellerRows(raw)
+      setTellerNormalized(norm)
+      // try set opening balance from first row if present
+      const firstWithOpening = raw.find((r) => {
+        const keys = Object.keys(r).map((k) => k.toLowerCase().replace(/\s+/g, ""))
+        return keys.some((k) => k.includes("opening"))
+      })
+      if (firstWithOpening) {
+        const v = Object.values(firstWithOpening).find((val) => typeof val === "number" || /[0-9]/.test(String(val)))
+        if (v !== undefined) setOpeningBalance(safeNumber(v))
       }
-
-      // find header row by looking for CHEQUES and ACCOUNT keywords
-      let headerIdx = 0;
-      for (let i = 0; i < Math.min(6, raw.length); i++) {
-        const row = raw[i];
-        const joined = row.join(" ").toLowerCase();
-        if (joined.includes("cheques") && joined.includes("account")) {
-          headerIdx = i;
-          break;
-        }
-      }
-      const headerRow = (raw[headerIdx] || raw[0]).map((h: any) => String(h || "").trim());
-      const dataRows = raw.slice(headerIdx + 1);
-
-      const parsed: TellerRow[] = dataRows
-        .filter((r) => r && r.some((c: any) => String(c).trim() !== ""))
-        .map((r, i) => {
-          const obj: Record<string, any> = {};
-          headerRow.forEach((h: string, idx: number) => {
-            const key = String(h || "").replace(/\s+/g, "_").toUpperCase();
-            obj[key] = r[idx];
-          });
-
-          const acc =
-            obj["ACCOUNT_NO"] ||
-            obj["ACCOUNT NO"] ||
-            obj["ACCOUNT"] ||
-            obj["ACCOUNTNUMBER"] ||
-            obj["ACCOUNT_NO2"] ||
-            "";
-
-          // determine primary amount for matching: for teller we attempt find a non-zero amount
-          const debitAmount =
-            safeNumber(obj["SAVINGS_WITHDR"] || obj["SAVINGS WITHDR"] || obj["SAVINGS"]) +
-            safeNumber(obj["TO_VAULT"]) +
-            safeNumber(obj["EXPENSE"]);
-          const creditAmount =
-            safeNumber(obj["CASH_DEP"]) + safeNumber(obj["CASH_DEP_2"]) + safeNumber(obj["FROM_VAULT"]) + safeNumber(obj["WUMT"]);
-
-          const side: "debit" | "credit" = debitAmount > 0 && creditAmount === 0 ? "debit" : creditAmount > 0 && debitAmount === 0 ? "credit" : debitAmount >= creditAmount ? "debit" : "credit";
-
-          const amountForMatch = side === "debit" ? Math.abs(debitAmount) : Math.abs(creditAmount);
-
-          return {
-            id: `T-${Date.now()}-${i}`,
-            ACCOUNT_NO: String(acc).trim(),
-            NARRATION: obj["NARRATION"] || obj["Column1"] || "",
-            CHEQUES: safeNumber(obj["CHEQUES"]),
-            SAVINGS_WITHDR: safeNumber(obj["SAVINGS_WITHDR"] || obj["SAVINGS WITHDR"]),
-            TO_VAULT: safeNumber(obj["TO_VAULT"]),
-            EXPENSE: safeNumber(obj["EXPENSE"]),
-            WUMT: safeNumber(obj["WUMT"]),
-            OPENING_BALANCE: safeNumber(obj["OPENING_BALANCE"]),
-            CASH_DEP: safeNumber(obj["CASH_DEP"]),
-            CASH_DEP_2: safeNumber(obj["CASH_DEP_2"]),
-            FROM_VAULT: safeNumber(obj["FROM_VAULT"]),
-            side,
-            matched: false,
-            matchKey: `${String(acc).replace(/\s+/g, "")}|${Number(amountForMatch).toFixed(2)}`,
-            raw: r,
-          } as TellerRow;
-        });
-
-      setTellerFileName(file.name);
-      setTellerRows(parsed);
     } catch (err) {
-      console.error(err);
-      alert("Failed to parse Teller file. Ensure the file is valid Excel/CSV and contains expected headers.");
+      console.error("Failed to parse teller file", err)
+      alert("Failed to parse teller file. Ensure it's a valid Excel or CSV workbook.")
     }
-  };
+  }
 
-  // parse GL file
-  const parseGlFile = async (file: File) => {
+  // GL parse - expecting your GL export (we will auto-clean)
+  const handleGlUpload = async (file: File) => {
+    setGlFile(file)
     try {
-      const ab = await file.arrayBuffer();
-      const wb = XLSX.read(ab, { type: "array", cellDates: true });
-      // pick sheet that likely contains headers - fallback to first
-      let sheet = wb.Sheets[wb.SheetNames[0]];
-      for (const name of wb.SheetNames) {
-        const s = wb.Sheets[name];
-        const preview = XLSX.utils.sheet_to_json(s, { header: 1, defval: "", range: 0 }) as any[][];
-        const joined = (preview[0] || []).join(" ").toLowerCase();
-        if (joined.includes("transaction") && joined.includes("account")) {
-          sheet = s;
-          break;
+      const data = await file.arrayBuffer()
+      const wb = XLSX.read(data, { type: "array", cellDates: true })
+      // pick the sheet that contains 'account' and 'transaction' keywords if possible
+      let sheetName = wb.SheetNames[0]
+      for (const n of wb.SheetNames) {
+        const preview = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: "" }) as any[][]
+        const headerRow = preview.find((r) => r && r.some((c: any) => String(c).toLowerCase().includes("account")) && r.some((c: any) => String(c).toLowerCase().includes("transaction")))
+        if (headerRow) {
+          sheetName = n
+          break
         }
       }
-
-      const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" }) as any[][];
-      if (!raw || raw.length === 0) {
-        alert("GL file appears empty.");
-        return;
-      }
-
-      // detect header
-      let headerIdx = 0;
-      for (let i = 0; i < Math.min(6, raw.length); i++) {
-        const row = raw[i].map((c: any) => String(c || "").toLowerCase());
-        if (row.some((c: string) => c.includes("account")) && row.some((c: string) => c.includes("transaction"))) {
-          headerIdx = i;
-          break;
-        }
-      }
-      const headerRow = (raw[headerIdx] || raw[0]).map((h: any) => String(h || "").trim());
-      const dataRows = raw.slice(headerIdx + 1);
-
-      // build index map for header name lookups
-      const headerMap: Record<string, number> = {};
-      headerRow.forEach((h: string, idx: number) => {
-        headerMap[String(h || "").toLowerCase().replace(/\s+/g, "")] = idx;
-      });
-
-      const findIndex = (candidates: string[]) => {
-        for (const c of candidates) {
-          const key = c.toLowerCase().replace(/\s+/g, "");
-          if (headerMap[key] !== undefined) return headerMap[key];
-        }
-        return -1;
-      };
-
-      const idxTransactionDate = findIndex(["transactiondate", "transaction date", "transaction_date"]);
-      const idxBranch = findIndex(["branchname", "branch"]);
-      const idxAccount = findIndex(["accountnumber", "account number", "accountno", "account"]);
-      const idxDrCr = findIndex(["dr/cr", "drcr", "dr", "cr", "drcr.", "dr"]);
-      const idxCurrency = findIndex(["currency"]);
-      const idxLcy = findIndex(["lcya amount", "lcy amount", "lcyamount", "lc y amount", "lcamount", "lcyamount"]);
-      const idxAmount = idxLcy >= 0 ? idxLcy : findIndex(["amount", "lcamount", "lcyamount", "fc y amount"]);
-      const idxUser = findIndex(["userid", "user id", "user"]);
-      const idxAuthorizer = findIndex(["authoriserid", "authoriser id", "authorizer", "authoriser"]);
-      const idxRef = findIndex(["externalreferenceno", "external reference no", "reference", "externalreference"]);
-
-      const parsed: GLRow[] = dataRows
-        .filter((r) => r && r.some((c: any) => String(c).trim() !== ""))
-        .map((r, i) => {
-          const acc = idxAccount >= 0 ? String(r[idxAccount] || "").trim() : "";
-          const amt = idxAmount >= 0 ? safeNumber(r[idxAmount]) : 0;
-          const drcr = idxDrCr >= 0 ? String(r[idxDrCr] || "").trim() : "";
-          const date = idxTransactionDate >= 0 ? String(r[idxTransactionDate] || "") : "";
-          const br = idxBranch >= 0 ? String(r[idxBranch] || "") : "";
-          const user = idxUser >= 0 ? String(r[idxUser] || "") : "";
-          const authorizer = idxAuthorizer >= 0 ? String(r[idxAuthorizer] || "") : "";
-          const ref = idxRef >= 0 ? String(r[idxRef] || "") : "";
-
-          return {
-            id: `G-${Date.now()}-${i}`,
-            Date: date,
-            Branch: br,
-            AccountNo: String(acc),
-            Type: drcr,
-            Currency: idxCurrency >= 0 ? String(r[idxCurrency] || "") : undefined,
-            Amount: amt,
-            User: user,
-            Authorizer: authorizer,
-            Reference: ref,
-            matched: false,
-            matchKey: `${String(acc).replace(/\s+/g, "")}|${Number(Math.abs(amt)).toFixed(2)}`,
-            raw: r,
-          } as GLRow;
-        });
-
-      setGlFileName(file.name);
-      setGlRows(parsed);
+      const raw = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" }) as any[]
+      setGlRaw(raw)
+      setGlNormalized(normalizeGlRows(raw))
     } catch (err) {
-      console.error(err);
-      alert("Failed to parse GL file. Ensure it's valid Excel/CSV file.");
+      console.error("Failed to parse GL file", err)
+      alert("Failed to parse GL file. Ensure it's a valid Excel or CSV workbook.")
     }
-  };
+  }
 
-  // filter GL by user id (case-insensitive)
-  const filteredGLByUser = useMemo(() => {
-    if (!glFilterUser.trim()) return glRows;
-    return glRows.filter((g) => String(g.User || "").toLowerCase().includes(glFilterUser.toLowerCase()));
-  }, [glRows, glFilterUser]);
+  // Normalization logic for teller rows
+  const normalizeTellerRows = (rawRows: TellerRawRow[]) => {
+    const out: NormalizedRow[] = []
+    rawRows.forEach((r, idx) => {
+      // build a forgiving map of header->value
+      const map: Record<string, any> = {}
+      Object.keys(r).forEach((k) => (map[k.toLowerCase().replace(/\s+/g, "")] = r[k]))
 
-  // Matching logic (AccountNo + Amount):
-  // Run whenever tellerRows or glRows change
-  const runMatching = () => {
-    if (tellerRows.length === 0 && glRows.length === 0) return;
+      const acct = String(map["accountno"] || map["account_no"] || map["account"] || map["accountnumber"] || map["nubanac"] || "").trim()
+      const narration = String(map["column1"] || map["narration"] || map["column"] || map["description"] || map["account/gldescription"] || "").trim()
 
-    // index gl by matchKey -> store array indices
-    const glIndex: Record<string, number[]> = {};
-    glRows.forEach((g, idx) => {
-      const k = g.matchKey || `${String(g.AccountNo || "").replace(/\s+/g, "")}|0.00`;
-      glIndex[k] = glIndex[k] || [];
-      glIndex[k].push(idx);
-    });
+      // possible columns with amounts (debit side)
+      const savingsWithdr = safeNumber(map["savingswithdr"] || map["savings_withdr"] || map["savings_withdrawal"] || map["savings"])
+      const toVault = safeNumber(map["tovault"] || map["to_vault"])
+      const expense = safeNumber(map["expense"])
+      // credit-side
+      const cashDep = safeNumber(map["cashdep"] || map["cash_dep"] || map["cashdeposit"] || map["cashdeposit2"])
+      const cashDep2 = safeNumber(map["cashdep2"] || map["cash_dep_2"])
+      const fromVault = safeNumber(map["fromvault"] || map["from_vault"])
+      const wumt = safeNumber(map["wumt"] || map["wumt"])
+      const cheques = safeNumber(map["cheques"])
 
-    // new copies
-    const newGl = glRows.map((g) => ({ ...g, matched: false }));
-    const newTeller = tellerRows.map((t) => ({ ...t, matched: false }));
+      // For teller sheet we'll create separate normalized entries for each non-zero amount with correct side
+      const pushIf = (amt: number, side: "debit" | "credit", label?: string) => {
+        if (!acct || amt === 0) return
+        out.push({
+          id: `T-${idx}-${label || side}-${out.length}`,
+          source: "teller",
+          side,
+          account: acct,
+          amount: amt,
+          narration,
+          raw: r,
+          matched: false,
+        })
+      }
 
-    // match teller -> gl by exact keys (first available)
-    newTeller.forEach((t, tIdx) => {
-      const k = t.matchKey || `${String(t.ACCOUNT_NO || "").replace(/\s+/g, "")}|0.00`;
-      const candidates = glIndex[k] || [];
-      if (candidates.length > 0) {
-        // use first candidate not yet matched
-        const foundIdx = candidates.find((gi) => !newGl[gi].matched);
-        if (foundIdx !== undefined) {
-          newTeller[tIdx].matched = true;
-          newGl[foundIdx].matched = true;
+      pushIf(savingsWithdr, "debit", "savings")
+      pushIf(toVault, "debit", "tovault")
+      pushIf(expense, "debit", "expense")
+
+      pushIf(cashDep, "credit", "cashdep")
+      pushIf(cashDep2, "credit", "cashdep2")
+      pushIf(fromVault, "credit", "fromvault")
+      pushIf(wumt, "credit", "wumt")
+
+      // CHEQUES - treat as credit for teller side only if present (but earlier you said don't add cheque deposit to balance — we'll mark but not include in computed till by default)
+      if (cheques) {
+        out.push({
+          id: `T-${idx}-cheque-${out.length}`,
+          source: "teller",
+          side: "credit",
+          account: acct,
+          amount: cheques,
+          narration: `CHEQUE: ${narration}`,
+          raw: r,
+          matched: false,
+        })
+      }
+    })
+    return out
+  }
+
+  // Normalization logic for GL rows
+  const normalizeGlRows = (rawRows: GLRawRow[]) => {
+    const out: NormalizedRow[] = []
+    rawRows.forEach((r, idx) => {
+      // create lowercase map
+      const map: Record<string, any> = {}
+      Object.keys(r).forEach((k) => (map[k.toLowerCase().replace(/\s+/g, "")] = r[k]))
+
+      const acct = String(map["accountnumber"] || map["account_number"] || map["accountno"] || map["account"] || map["nubanac"] || "").trim()
+      const narration = String(map["narration"] || map["transactiondescription"] || map["transaction_description"] || map["account/gldescription"] || "").trim()
+      // DR/CR value if present
+      const drcr = String(map["dr/cr"] || map["drcr"] || map["type"] || map["dr"] || map["cr"] || "").trim().toLowerCase()
+      // amount candidates: lcy amount, lcyamount, lcya amount variations or amount or lcamount
+      const amountCandidates = ["lcyamount", "lcy_amount", "lcyaamount", "lcya amount", "lcamount", "amount", "lcy"]
+      let amt = 0
+      for (const c of amountCandidates) {
+        if (map[c] !== undefined) {
+          amt = safeNumber(map[c])
+          if (amt !== 0) break
         }
       }
-    });
+      // also try FCY AMOUNT if LCY not present
+      if (amt === 0 && map["fcyamount"]) amt = safeNumber(map["fcyamount"])
 
-    setTellerRows(newTeller);
-    setGlRows(newGl);
-  };
+      // choose side: if dr/cr present, use it. Otherwise infer positive = debit? (we'll default to debit if not present)
+      const side: "debit" | "credit" = drcr.includes("d") ? "debit" : drcr.includes("c") ? "credit" : amt < 0 ? "credit" : "debit"
 
-  // compute totals per side and per file
+      if (!acct || amt === 0) {
+        // still include if narration and something present
+        if (acct && amt === 0) {
+          // include zero-amt row? skip
+        }
+        return
+      }
+
+      out.push({
+        id: `G-${idx}`,
+        source: "gl",
+        side,
+        account: acct,
+        amount: Math.abs(amt),
+        currency: String(map["currency"] || ""),
+        date: String(map["transactiondate"] || map["transaction_date"] || map["valuedate"] || ""),
+        narration,
+        user: String(map["userid"] || map["user"] || ""),
+        authorizer: String(map["authoriserid"] || map["authoriser"] || map["authorizer"] || ""),
+        reference: String(map["externalreferenceno"] || map["externalreference" || "reference"] || ""),
+        raw: r,
+        matched: false,
+      })
+    })
+    return out
+  }
+
+  // Matching logic: account + amount exact match (both normalized lists)
+  const runMatch = (tellerList: NormalizedRow[], glList: NormalizedRow[]) => {
+    // Build index for GL: account|amount|side => indices
+    const index = new Map<string, number[]>()
+    glList.forEach((g, i) => {
+      const key = `${g.account}__${Number(g.amount).toFixed(2)}__${g.side}`
+      if (!index.has(key)) index.set(key, [])
+      index.get(key)!.push(i)
+    })
+
+    // copy arrays to mutate matched flags
+    const glCopy = glList.map((g) => ({ ...g, matched: false }))
+    const tellerCopy = tellerList.map((t) => ({ ...t, matched: false }))
+
+    // Attempt to match teller entries to GL entries
+    for (let ti = 0; ti < tellerCopy.length; ti++) {
+      const t = tellerCopy[ti]
+      const keyExact = `${t.account}__${Number(t.amount).toFixed(2)}__${t.side}`
+      const candidates = index.get(keyExact) ?? []
+
+      // pick first unmatched gl index
+      const pick = candidates.find((ci) => !glCopy[ci].matched)
+      if (pick !== undefined) {
+        tellerCopy[ti].matched = true
+        glCopy[pick].matched = true
+      } else {
+        // If not found with same side, allow match regardless of GL side (some GL exports don't have correct DR/CR label)
+        const keyNoSide = `${t.account}__${Number(t.amount).toFixed(2)}__`
+        // find any gl row with same account & amount
+        const anyIdx = glCopy.findIndex((g) => !g.matched && g.account === t.account && Number(g.amount).toFixed(2) === Number(t.amount).toFixed(2))
+        if (anyIdx !== -1) {
+          tellerCopy[ti].matched = true
+          glCopy[anyIdx].matched = true
+        }
+      }
+    }
+
+    return { tellerCopy, glCopy }
+  }
+
+  // When either normalized list changes, re-run matching
+  useEffect(() => {
+    const { tellerCopy, glCopy } = runMatch(tellerNormalized, glNormalized)
+    setTellerNormalized(tellerCopy)
+    setGlNormalized(glCopy)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tellerRaw.length, glRaw.length]) // only run when files change
+
+  // Totals for summary cards
   const totals = useMemo(() => {
-    const tellerDebit = tellerRows.reduce((s, r) => {
-      if (r.side === "debit") {
-        const amt =
-          safeNumber(r.SAVINGS_WITHDR) + safeNumber(r.TO_VAULT) + safeNumber(r.EXPENSE) + safeNumber(r.CHEQUES || 0);
-        return s + Math.abs(amt);
-      }
-      return s;
-    }, 0);
-    const tellerCredit = tellerRows.reduce((s, r) => {
-      if (r.side === "credit") {
-        const amt = safeNumber(r.CASH_DEP) + safeNumber(r.CASH_DEP_2) + safeNumber(r.FROM_VAULT) + safeNumber(r.WUMT || 0);
-        return s + Math.abs(amt);
-      }
-      return s;
-    }, 0);
+    const sum = (arr: NormalizedRow[]) => arr.reduce((a, b) => a + (b.amount || 0), 0)
+    const tellerDebit = sum(tellerNormalized.filter((r) => r.side === "debit"))
+    const tellerCredit = sum(tellerNormalized.filter((r) => r.side === "credit"))
+    const glDebit = sum(glNormalized.filter((r) => r.side === "debit"))
+    const glCredit = sum(glNormalized.filter((r) => r.side === "credit"))
+    const matchedCount = (tellerNormalized.filter((r) => r.matched).length + glNormalized.filter((r) => r.matched).length) / 2 // pairs
+    const unmatchedTeller = tellerNormalized.filter((r) => !r.matched).length
+    const unmatchedGl = glNormalized.filter((r) => !r.matched).length
+    return { tellerDebit, tellerCredit, glDebit, glCredit, matchedCount, unmatchedTeller, unmatchedGl }
+  }, [tellerNormalized, glNormalized])
 
-    const glDebit = glRows.reduce((s, r) => {
-      if ((r.Type || "").toLowerCase().includes("d") || (r.Type || "").toLowerCase().includes("dr")) {
-        return s + Math.abs(safeNumber(r.Amount));
-      }
-      return s;
-    }, 0);
-    const glCredit = glRows.reduce((s, r) => {
-      if ((r.Type || "").toLowerCase().includes("c") || (r.Type || "").toLowerCase().includes("cr")) {
-        return s + Math.abs(safeNumber(r.Amount));
-      }
-      return s;
-    }, 0);
+  // Computed Till logic (example formula)
+  // Opening + totalCredit - totalDebit - buyAmount + sellAmount
+  // NOTE: user told not to add cheque deposit — we will exclude teller cheque rows from credit total when computing till
+  const computedTill = useMemo(() => {
+    const opening = safeNumber(openingBalance)
+    const buy = safeNumber(buyAmount)
+    const sell = safeNumber(sellAmount)
+    // exclude cheques by checking narration === 'CHEQUE:' prefix
+    const credits = tellerNormalized
+      .filter((r) => r.side === "credit" && !(String(r.narration || "").toUpperCase().includes("CHEQUE")))
+      .reduce((s, r) => s + r.amount, 0)
+    const debits = tellerNormalized.filter((r) => r.side === "debit").reduce((s, r) => s + r.amount, 0)
+    return opening + credits - debits - buy + sell
+  }, [openingBalance, buyAmount, sellAmount, tellerNormalized])
 
-    return {
-      tellerDebit,
-      tellerCredit,
-      glDebit,
-      glCredit,
-      tellerCount: tellerRows.length,
-      glCount: glRows.length,
-      matchedTeller: tellerRows.filter((r) => r.matched).length,
-      matchedGl: glRows.filter((r) => r.matched).length,
-    };
-  }, [tellerRows, glRows]);
+  const difference = useMemo(() => {
+    // difference between computed till and GL-balanced figure (we'll use glCredit - glDebit as GL net)
+    const glNet = totals.glCredit - totals.glDebit
+    // Your expected comparison might be computedTill - glNet
+    return Number((computedTill - glNet).toFixed(2))
+  }, [computedTill, totals])
 
-  // Run match when user clicks Run Match or after both uploads (we'll provide a button + auto-run)
-  const handleRunMatch = () => {
-    runMatching();
-    // small feedback (no toast lib used)
-    alert("Matching completed (Account Number + Amount). Matched rows are highlighted.");
-  };
-
-  // Export to Excel (Teller, GL, MatchSummary)
+  // Export function
   const handleExport = () => {
-    const date = new Date().toISOString().split("T")[0];
-    const wb = XLSX.utils.book_new();
-
-    const tellerSheet = tellerRows.map((r) => ({
+    const wb = XLSX.utils.book_new()
+    const tellerSheet = tellerNormalized.map((r) => ({
       id: r.id,
-      ACCOUNT_NO: r.ACCOUNT_NO,
-      NARRATION: r.NARRATION,
+      source: r.source,
       side: r.side,
+      account: r.account,
+      amount: r.amount,
+      narration: r.narration,
       matched: r.matched ? "MATCHED" : "UNMATCHED",
-      CHEQUES: r.CHEQUES,
-      SAVINGS_WITHDR: r.SAVINGS_WITHDR,
-      TO_VAULT: r.TO_VAULT,
-      EXPENSE: r.EXPENSE,
-      CASH_DEP: r.CASH_DEP,
-      CASH_DEP_2: r.CASH_DEP_2,
-      FROM_VAULT: r.FROM_VAULT,
-      WUMT: r.WUMT,
-    }));
-    const glSheet = glRows.map((g) => ({
-      id: g.id,
-      Date: g.Date,
-      Branch: g.Branch,
-      AccountNo: g.AccountNo,
-      Type: g.Type,
-      Amount: g.Amount,
-      User: g.User,
-      Authorizer: g.Authorizer,
-      Reference: g.Reference,
-      matched: g.matched ? "MATCHED" : "UNMATCHED",
-    }));
+    }))
+    const glSheet = glNormalized.map((r) => ({
+      id: r.id,
+      source: r.source,
+      side: r.side,
+      account: r.account,
+      amount: r.amount,
+      date: r.date,
+      narration: r.narration,
+      user: r.user,
+      matched: r.matched ? "MATCHED" : "UNMATCHED",
+    }))
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tellerSheet), "Teller_Normalized")
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(glSheet), "GL_Normalized")
+    const date = new Date().toISOString().split("T")[0]
+    XLSX.writeFile(wb, `teller_gl_recon_${date}.xlsx`)
+  }
 
-    const summary = [
-      ["Branch Code", branchCode],
-      ["Branch Name", branchName],
-      ["Country", country],
-      ["Teller Name", tellerName],
-      ["Supervisor Name", supervisorName],
-      ["Teller Rows", totals.tellerCount],
-      ["GL Rows", totals.glCount],
-      ["Matched Teller Rows", totals.matchedTeller],
-      ["Matched GL Rows", totals.matchedGl],
-      ["Teller Total Debit", totals.tellerDebit],
-      ["Teller Total Credit", totals.tellerCredit],
-      ["GL Total Debit", totals.glDebit],
-      ["GL Total Credit", totals.glCredit],
-      ["Date", date],
-    ];
-
-    const wsT = XLSX.utils.json_to_sheet(tellerSheet);
-    const wsG = XLSX.utils.json_to_sheet(glSheet);
-    const wsS = XLSX.utils.aoa_to_sheet(summary);
-
-    XLSX.utils.book_append_sheet(wb, wsT, "Teller");
-    XLSX.utils.book_append_sheet(wb, wsG, "GL");
-    XLSX.utils.book_append_sheet(wb, wsS, "Summary");
-    XLSX.writeFile(wb, `teller-gl-reconciliation-${date}.xlsx`);
-  };
-
-  // UI: table row background class based on match state and active tab logic
-  const rowClassForTeller = (r: TellerRow) => {
-    if (r.matched) return "bg-emerald-50";
-    // if key exists in GL? We already mark matched; find if account exists but amount diff -> highlight red
-    const glMatchExists = glRows.some((g) => String(g.AccountNo || "").replace(/\s+/g, "") === String(r.ACCOUNT_NO || "").replace(/\s+/g, ""));
-    if (glMatchExists && !r.matched) return "bg-rose-50";
-    if (!glMatchExists) return "bg-yellow-50";
-    return "";
-  };
-  const rowClassForGL = (g: GLRow) => {
-    if (g.matched) return "bg-emerald-50";
-    const tellerMatchExists = tellerRows.some((t) => String(t.ACCOUNT_NO || "").replace(/\s+/g, "") === String(g.AccountNo || "").replace(/\s+/g, ""));
-    if (tellerMatchExists && !g.matched) return "bg-rose-50";
-    if (!tellerMatchExists) return "bg-yellow-50";
-    return "";
-  };
-
-  // which rows to show in the current tab
-  const currentPreviewRows: (TellerRow | GLRow)[] = useMemo(() => {
-    if (activeTab.startsWith("teller")) {
-      const side = activeTab === "teller_debit" ? "debit" : "credit";
-      return tellerRows.filter((r) => r.side === side);
-    } else {
-      const side = activeTab === "gl_debit" ? "debit" : "credit";
-      // GL side determination by Type field: treat DR/ D as debit and CR/ C as credit
-      return filteredGLByUser.filter((g) => {
-        const t = (g.Type || "").toLowerCase();
-        const isDebit = t.includes("d") || t.includes("dr");
-        const isCredit = t.includes("c") || t.includes("cr");
-        return side === "debit" ? isDebit : isCredit;
-      });
+  // UI lists for current tab
+  const tabRows = useMemo(() => {
+    switch (activeTab) {
+      case "teller_debit":
+        return tellerNormalized.filter((r) => r.side === "debit")
+      case "teller_credit":
+        return tellerNormalized.filter((r) => r.side === "credit")
+      case "gl_debit":
+        return glNormalized.filter((r) => r.side === "debit")
+      case "gl_credit":
+        return glNormalized.filter((r) => r.side === "credit")
+      default:
+        return []
     }
-  }, [activeTab, tellerRows, filteredGLByUser]);
-
-  // Preview table headers for teller and gl (slice limited to a set of columns to keep UI neat)
-  const renderPreviewTable = () => {
-    if (activeTab.startsWith("teller")) {
-      const rows = (currentPreviewRows as TellerRow[]);
-      return (
-        <div className="overflow-auto max-h-[40vh] border rounded-lg bg-white">
-          <table className="w-full min-w-[900px]">
-            <thead className="sticky top-0 bg-gray-50">
-              <tr>
-                <th className="p-2 text-left">Account No</th>
-                <th className="p-2 text-left">Narration</th>
-                <th className="p-2 text-right">Savings Withdr.</th>
-                <th className="p-2 text-right">To Vault</th>
-                <th className="p-2 text-right">Expense</th>
-                <th className="p-2 text-right">Cash Dep</th>
-                <th className="p-2 text-right">Cash Dep 2</th>
-                <th className="p-2 text-right">From Vault</th>
-                <th className="p-2 text-right">WUMT</th>
-                <th className="p-2">Match</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.id} className={`${rowClassForTeller(r)} border-b`}>
-                  <td className="p-2 font-mono">{r.ACCOUNT_NO || "-"}</td>
-                  <td className="p-2">{r.NARRATION || "-"}</td>
-                  <td className="p-2 text-right">₦{safeNumber(r.SAVINGS_WITHDR).toLocaleString()}</td>
-                  <td className="p-2 text-right">₦{safeNumber(r.TO_VAULT).toLocaleString()}</td>
-                  <td className="p-2 text-right">₦{safeNumber(r.EXPENSE).toLocaleString()}</td>
-                  <td className="p-2 text-right">₦{safeNumber(r.CASH_DEP).toLocaleString()}</td>
-                  <td className="p-2 text-right">₦{safeNumber(r.CASH_DEP_2).toLocaleString()}</td>
-                  <td className="p-2 text-right">₦{safeNumber(r.FROM_VAULT).toLocaleString()}</td>
-                  <td className="p-2 text-right">₦{safeNumber(r.WUMT).toLocaleString()}</td>
-                  <td className="p-2">
-                    {r.matched ? (
-                      <Badge className="bg-emerald-100 text-emerald-700">Matched</Badge>
-                    ) : (
-                      <Badge className="bg-rose-100 text-rose-700">Unmatched</Badge>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      );
-    } else {
-      const rows = (currentPreviewRows as GLRow[]);
-      return (
-        <div className="overflow-auto max-h-[40vh] border rounded-lg bg-white">
-          <table className="w-full min-w-[900px]">
-            <thead className="sticky top-0 bg-gray-50">
-              <tr>
-                <th className="p-2 text-left">Account No</th>
-                <th className="p-2 text-left">Date</th>
-                <th className="p-2 text-left">Branch</th>
-                <th className="p-2 text-right">Amount</th>
-                <th className="p-2 text-left">Type</th>
-                <th className="p-2 text-left">User</th>
-                <th className="p-2 text-left">Authorizer</th>
-                <th className="p-2 text-left">Reference</th>
-                <th className="p-2">Match</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((g) => (
-                <tr key={g.id} className={`${rowClassForGL(g as GLRow)} border-b`}>
-                  <td className="p-2 font-mono">{g.AccountNo || "-"}</td>
-                  <td className="p-2">{g.Date || "-"}</td>
-                  <td className="p-2">{g.Branch || "-"}</td>
-                  <td className="p-2 text-right">₦{safeNumber(g.Amount).toLocaleString()}</td>
-                  <td className="p-2">{g.Type || "-"}</td>
-                  <td className="p-2">{g.User || "-"}</td>
-                  <td className="p-2">{g.Authorizer || "-"}</td>
-                  <td className="p-2">{g.Reference || "-"}</td>
-                  <td className="p-2">
-                    {g.matched ? (
-                      <Badge className="bg-emerald-100 text-emerald-700">Matched</Badge>
-                    ) : (
-                      <Badge className="bg-rose-100 text-rose-700">Unmatched</Badge>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      );
-    }
-  };
+  }, [activeTab, tellerNormalized, glNormalized])
 
   return (
-    <div className="min-h-screen p-6 bg-gradient-to-br from-blue-50 to-teal-100">
-      <Card className="max-w-7xl mx-auto rounded-2xl shadow-lg border-none">
-        <CardHeader className="rounded-t-2xl p-6 bg-gradient-to-r from-blue-600 to-teal-500 text-white">
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="text-2xl font-bold">Teller ↔ GL Reconciliation</CardTitle>
-              <CardDescription className="text-blue-100">
-                Upload Teller (CAST) and GL exports. Matching uses Account Number + Amount. Use the tabs to switch views.
-              </CardDescription>
+    <div className="space-y-6 p-6">
+      <div>
+        <h1 className="text-3xl font-bold">Teller & GL Reconciliation — Dashboard</h1>
+        <p className="text-sm text-muted-foreground mt-1">Upload Teller Proof and GL Report, preview and auto-match by Account + Amount.</p>
+      </div>
+
+      <BranchInfo
+        branchCode={branchCode}
+        branchName={branchName}
+        country={country}
+        onBranchCodeChange={setBranchCode}
+        onBranchNameChange={setBranchName}
+        onCountryChange={setCountry}
+      />
+
+      {/* Upload Section */}
+      <div className="grid md:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><FileSpreadsheet className="h-4 w-4 text-primary" /> Teller Proof</CardTitle>
+            <CardDescription>Upload the teller excel (sheet named 'cast' preferred or simple columns)</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-6 text-center hover:bg-muted/50">
+              <Upload className="h-8 w-8 mb-2" />
+              <span className="text-sm font-medium">{tellerFile ? tellerFile.name : "Click to upload teller file (Sheet2: cast preferred)"}</span>
+              <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => e.target.files?.[0] && handleTellerUpload(e.target.files[0])} />
+            </label>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <Input placeholder="Teller Name" value={tellerName} onChange={(e) => setTellerName(e.target.value)} />
+              <Input placeholder="Supervisor Name" value={supervisorName} onChange={(e) => setSupervisorName(e.target.value)} />
             </div>
-            <div className="flex gap-3">
-              <Button onClick={handleRunMatch} className="bg-gradient-to-r from-sky-600 to-teal-400 text-white">
-                <CheckCircle2 className="mr-2 h-4 w-4" /> Run Match
-              </Button>
-              <Button onClick={handleExport} variant="outline">
-                <Download className="mr-2 h-4 w-4" /> Export
-              </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><FileSpreadsheet className="h-4 w-4 text-primary" /> GL Report</CardTitle>
+            <CardDescription>Upload the GL export (we auto-clean and map TXN DATE, BRANCH, ACCOUNT NUMBER, DR/CR, LCY AMOUNT, USER ID, AUTHORISER ID, EXTERNAL REFERENCE)</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-6 text-center hover:bg-muted/50">
+              <Upload className="h-8 w-8 mb-2" />
+              <span className="text-sm font-medium">{glFile ? glFile.name : "Click to upload GL file"}</span>
+              <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => e.target.files?.[0] && handleGlUpload(e.target.files[0])} />
+            </label>
+
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              <Input type="number" placeholder="Opening Balance (₦)" value={openingBalance === "" ? "" : String(openingBalance)} onChange={(e) => setOpeningBalance(e.target.value === "" ? "" : Number(e.target.value))} />
+              <Input type="number" placeholder="Buy Amount (₦)" value={buyAmount === "" ? "" : String(buyAmount)} onChange={(e) => setBuyAmount(e.target.value === "" ? "" : Number(e.target.value))} />
+              <Input type="number" placeholder="Sell Amount (₦)" value={sellAmount === "" ? "" : String(sellAmount)} onChange={(e) => setSellAmount(e.target.value === "" ? "" : Number(e.target.value))} />
             </div>
-          </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Summary Cards */}
+      <div className="grid md:grid-cols-4 gap-4">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">Teller Total Debit</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">₦{totals.tellerDebit.toLocaleString()}</div>
+            <div className="text-xs text-muted-foreground">Sum of teller debit entries</div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">Teller Total Credit</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">₦{totals.tellerCredit.toLocaleString()}</div>
+            <div className="text-xs text-muted-foreground">Sum of teller credit entries (cheques excluded from till)</div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">GL Net (Credit - Debit)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">₦{(totals.glCredit - totals.glDebit).toLocaleString()}</div>
+            <div className="text-xs text-muted-foreground">GL side totals</div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">Matched Pairs</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{totals.matchedCount}</div>
+            <div className="text-xs text-muted-foreground">Auto-matched by Account + Amount</div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Tabs + Preview */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Preview & Tabs</CardTitle>
+          <CardDescription>Switch between Teller Debit / Teller Credit / GL Debit / GL Credit</CardDescription>
         </CardHeader>
+        <CardContent>
+          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)} className="w-full">
+            <TabsList className="grid grid-cols-4 gap-2 mb-4">
+              <TabsTrigger value="teller_debit">Teller Debit</TabsTrigger>
+              <TabsTrigger value="teller_credit">Teller Credit</TabsTrigger>
+              <TabsTrigger value="gl_debit">GL Debit</TabsTrigger>
+              <TabsTrigger value="gl_credit">GL Credit</TabsTrigger>
+            </TabsList>
 
-        <CardContent className="p-6 space-y-6">
-          {/* Branch + teller/supervisor fields */}
-          <div className="grid md:grid-cols-3 gap-4">
-            <div>
-              <BranchInfo
-                branchCode={branchCode}
-                branchName={branchName}
-                country={country}
-                onBranchCodeChange={setBranchCode}
-                onBranchNameChange={setBranchName}
-                onCountryChange={setCountry}
-              />
+            <div className="rounded-lg border overflow-auto max-h-[520px]">
+              <table className="w-full table-auto">
+                <thead className="bg-muted/50 sticky top-0">
+                  <tr>
+                    <th className="p-2 text-left">Account</th>
+                    <th className="p-2 text-left">Side</th>
+                    <th className="p-2 text-right">Amount</th>
+                    <th className="p-2 text-left">Narration / Date / User</th>
+                    <th className="p-2 text-center">Matched</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tabRows.slice(0, previewLimit).map((r) => (
+                    <tr key={r.id} className={r.matched ? "bg-green-50" : "bg-white"}>
+                      <td className="p-2 font-mono">{r.account}</td>
+                      <td className="p-2">{r.side.toUpperCase()}</td>
+                      <td className="p-2 text-right font-mono">₦{Number(r.amount).toLocaleString()}</td>
+                      <td className="p-2 text-sm">
+                        <div>{r.narration}</div>
+                        <div className="text-xs text-muted-foreground">{r.date || ""} {r.user ? ` • ${r.user}` : ""}</div>
+                      </td>
+                      <td className="p-2 text-center">
+                        {r.matched ? <Badge>Matched</Badge> : <Badge variant="outline">Pending</Badge>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-
-            <div className="space-y-2">
-              <Label>Teller Name</Label>
-              <Input placeholder="Enter Teller name" value={tellerName} onChange={(e) => setTellerName(e.target.value)} />
-            </div>
-
-            <div className="space-y-2">
-              <Label>Supervisor Name</Label>
-              <Input placeholder="Enter Supervisor name" value={supervisorName} onChange={(e) => setSupervisorName(e.target.value)} />
-            </div>
-          </div>
-
-          {/* Uploaders */}
-          <div className="grid md:grid-cols-2 gap-6">
-            <div>
-              <Label>Teller file (CAST sheet expected)</Label>
-              <div className="flex gap-2 items-center">
-                <Input
-                  type="file"
-                  accept=".xlsx,.xls,.csv"
-                  onChange={(e) => e.target.files?.[0] && parseTellerFile(e.target.files[0])}
-                />
-                {tellerFileName ? <Badge className="bg-green-600">{tellerFileName}</Badge> : null}
+            <div className="mt-3 flex items-center justify-between">
+              <div className="text-xs text-muted-foreground">Showing up to {previewLimit} rows. Scroll inside the box to see more.</div>
+              <div className="flex items-center gap-2">
+                <Input type="number" value={previewLimit} onChange={(e) => setPreviewLimit(Number(e.target.value || 50))} className="w-24" />
+                <Button onClick={() => { setPreviewLimit(500); alert("Preview expanded to 500 rows") }}>Expand</Button>
               </div>
-              <p className="text-xs text-muted-foreground mt-2">Expected columns: CHEQUES, ACCOUNT NO, SAVINGS WITHDR., TO VAULT, EXPENSE, WUMT, OPENING BALANCE, CASH DEP, CASH DEP 2, FROM VAULT</p>
             </div>
-
-            <div>
-              <Label>GL file</Label>
-              <div className="flex gap-2 items-center">
-                <Input
-                  type="file"
-                  accept=".xlsx,.xls,.csv"
-                  onChange={(e) => e.target.files?.[0] && parseGlFile(e.target.files[0])}
-                />
-                {glFileName ? <Badge className="bg-blue-600">{glFileName}</Badge> : null}
-              </div>
-              <p className="text-xs text-muted-foreground mt-2">We extract: TRANSACTION DATE, BRANCH NAME, ACCOUNT NUMBER, DR/CR, CURRENCY, LCY AMOUNT, USER ID, AUTHORISER ID, EXTERNAL REFERENCE</p>
-            </div>
-          </div>
-
-          {/* Tabs - 4 views */}
-          <div>
-            <div className="flex flex-wrap justify-center gap-3">
-              <Button variant={activeTab === "teller_debit" ? "default" : "outline"} onClick={() => setActiveTab("teller_debit")}>Teller Debit</Button>
-              <Button variant={activeTab === "teller_credit" ? "default" : "outline"} onClick={() => setActiveTab("teller_credit")}>Teller Credit</Button>
-              <Button variant={activeTab === "gl_debit" ? "default" : "outline"} onClick={() => setActiveTab("gl_debit")}>GL Debit</Button>
-              <Button variant={activeTab === "gl_credit" ? "default" : "outline"} onClick={() => setActiveTab("gl_credit")}>GL Credit</Button>
-            </div>
-
-            {/* GL filter */}
-            {activeTab.startsWith("gl") && (
-              <div className="flex items-center gap-2 justify-center mt-3">
-                <Input placeholder="Filter GL by User ID" value={glFilterUser} onChange={(e) => setGlFilterUser(e.target.value)} className="w-60" />
-                <Button onClick={() => { /* uses filteredGLByUser computed */ alert("Filter applied"); }}>Filter</Button>
-              </div>
-            )}
-
-            {/* Preview */}
-            <div className="mt-4">{renderPreviewTable()}</div>
-          </div>
-
-          {/* Summary cards */}
-          <div className="grid md:grid-cols-4 gap-4">
-            <Card className="p-3">
-              <div className="text-xs text-muted-foreground">Teller Rows</div>
-              <div className="text-xl font-bold">{totals.tellerCount}</div>
-            </Card>
-            <Card className="p-3">
-              <div className="text-xs text-muted-foreground">GL Rows</div>
-              <div className="text-xl font-bold">{totals.glCount}</div>
-            </Card>
-            <Card className="p-3">
-              <div className="text-xs text-muted-foreground">Matched</div>
-              <div className="text-xl font-bold">{totals.matchedTeller}</div>
-            </Card>
-            <Card className="p-3">
-              <div className="text-xs text-muted-foreground">Difference (Teller Debit - GL Debit)</div>
-              <div className={`text-xl font-bold ${Math.abs(totals.tellerDebit - totals.glDebit) === 0 ? "text-emerald-600" : "text-rose-600"}`}>
-                ₦{Math.abs(totals.tellerDebit - totals.glDebit).toLocaleString()}
-              </div>
-            </Card>
-          </div>
+          </Tabs>
         </CardContent>
       </Card>
 
-      {/* small legend */}
-      <div className="max-w-7xl mx-auto mt-4 flex gap-3">
-        <div className="flex items-center gap-2">
-          <span className="w-4 h-4 bg-emerald-100 border border-emerald-300 rounded-sm" /> <span className="text-sm">Matched</span>
+      {/* Results / Actions */}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div className="space-y-1">
+          <div className="text-sm">Computed Till Balance</div>
+          <div className="text-2xl font-bold">₦{computedTill.toLocaleString()}</div>
+          <div className="text-sm text-muted-foreground">Difference vs GL Net: <span className={difference === 0 ? "text-green-600" : "text-destructive"}>₦{difference.toLocaleString()}</span></div>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="w-4 h-4 bg-rose-100 border border-rose-300 rounded-sm" /> <span className="text-sm">Present but amount mismatch</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="w-4 h-4 bg-yellow-50 border border-yellow-300 rounded-sm" /> <span className="text-sm">Only in one file</span>
+
+        <div className="flex gap-2">
+          <Button onClick={handleExport} className="bg-gradient-to-r from-blue-600 to-teal-500 text-white">
+            <Download className="mr-2 h-4 w-4" /> Export Result
+          </Button>
+          <Button onClick={() => alert("Dummy Submit clicked — implement backend submit as needed")} variant="outline">Dummy Submit</Button>
         </div>
       </div>
+
+      {/* Matched / Pending lists */}
+      <div className="grid md:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>Matched Entries</CardTitle>
+            <CardDescription>Auto-matched rows (Teller ↔︎ GL)</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-auto max-h-72 rounded border">
+              <table className="w-full">
+                <thead className="bg-muted/50">
+                  <tr>
+                    <th className="p-2">Source</th>
+                    <th className="p-2">Account</th>
+                    <th className="p-2 text-right">Amount</th>
+                    <th className="p-2">Side</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    ...tellerNormalized.filter((r) => r.matched),
+                    ...glNormalized.filter((r) => r.matched),
+                  ].slice(0, 200).map((r) => (
+                    <tr key={r.id} className="bg-green-50">
+                      <td className="p-2">{r.source.toUpperCase()}</td>
+                      <td className="p-2 font-mono">{r.account}</td>
+                      <td className="p-2 text-right">₦{r.amount.toLocaleString()}</td>
+                      <td className="p-2">{r.side}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Pending Entries</CardTitle>
+            <CardDescription>Unmatched rows needing attention</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-auto max-h-72 rounded border">
+              <table className="w-full">
+                <thead className="bg-muted/50">
+                  <tr>
+                    <th className="p-2">Source</th>
+                    <th className="p-2">Account</th>
+                    <th className="p-2 text-right">Amount</th>
+                    <th className="p-2">Side</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    ...tellerNormalized.filter((r) => !r.matched),
+                    ...glNormalized.filter((r) => !r.matched),
+                  ].slice(0, 200).map((r) => (
+                    <tr key={r.id}>
+                      <td className="p-2">{r.source.toUpperCase()}</td>
+                      <td className="p-2 font-mono">{r.account}</td>
+                      <td className="p-2 text-right">₦{r.amount.toLocaleString()}</td>
+                      <td className="p-2">{r.side}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </div>
-  );
+  )
 }
