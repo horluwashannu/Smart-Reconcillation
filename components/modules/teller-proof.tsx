@@ -1,19 +1,20 @@
-"use client"
+"use client";
 
-import { useState } from "react"
-import * as XLSX from "xlsx"
+import { useState } from "react";
+import * as XLSX from "xlsx";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
   CardDescription,
-} from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Label } from "@/components/ui/label"
-import { Input } from "@/components/ui/input"
-import { Badge } from "@/components/ui/badge"
-import { Download } from "lucide-react"
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Download } from "lucide-react";
 import {
   Table,
   TableHeader,
@@ -21,69 +22,69 @@ import {
   TableHead,
   TableBody,
   TableCell,
-} from "@/components/ui/table"
+} from "@/components/ui/table";
 
 type TellerRow = {
-  ACCOUNT_NO?: string
-  OPENING_BALANCE?: number
-  CASH_DEP?: number
-  CASH_DEP_2?: number
-  SAVINGS_WITHDR?: number
-  TO_VAULT?: number
-  FROM_VAULT?: number
-  EXPENSE?: number
-  WUMT?: number
-  Column1?: string
-}
+  ACCOUNT_NO?: string;
+  OPENING_BALANCE?: number;
+  CASH_DEP?: number;
+  CASH_DEP_2?: number;
+  SAVINGS_WITHDR?: number;
+  TO_VAULT?: number;
+  FROM_VAULT?: number;
+  EXPENSE?: number;
+  WUMT?: number;
+  Column1?: string;
+};
 
 type GLRow = {
-  Date?: string
-  Branch?: string
-  AccountNo?: string
-  Type?: string
-  Currency?: string
-  Amount?: number
-  User?: string
-  Authorizer?: string
-  Reference?: string
-}
+  Date?: string;
+  Branch?: string;
+  AccountNo?: string;
+  Type?: string;
+  Currency?: string;
+  Amount?: number;
+  User?: string;
+  Authorizer?: string;
+  Reference?: string;
+};
 
 export function TellerProof() {
   const [activeTab, setActiveTab] = useState<
     "teller_debit" | "teller_credit" | "gl_debit" | "gl_credit"
-  >("teller_debit")
-  const [tellerRows, setTellerRows] = useState<TellerRow[]>([])
-  const [glRows, setGlRows] = useState<GLRow[]>([])
-  const [tellerName, setTellerName] = useState("")
-  const [supervisorName, setSupervisorName] = useState("")
-  const [glFilterUser, setGlFilterUser] = useState("")
-  const [filteredGl, setFilteredGl] = useState<GLRow[]>([])
+  >("teller_debit");
+  const [tellerRows, setTellerRows] = useState<TellerRow[]>([]);
+  const [glRows, setGlRows] = useState<GLRow[]>([]);
+  const [tellerName, setTellerName] = useState("");
+  const [supervisorName, setSupervisorName] = useState("");
+  const [glFilterUser, setGlFilterUser] = useState("");
+  const [filteredGl, setFilteredGl] = useState<GLRow[]>([]);
 
   const safeNumber = (v: any) => {
-    const s = String(v || "").replace(/[,₦$]/g, "").trim()
-    const n = Number(s)
-    return Number.isFinite(n) ? n : 0
-  }
+    const s = String(v || "").replace(/[,₦$]/g, "").trim();
+    const n = Number(s);
+    return Number.isFinite(n) ? n : 0;
+  };
 
   const findCastSheet = (wb: XLSX.WorkBook) => {
     const found = wb.SheetNames.find(
       (n) => n.toLowerCase().trim() === "cast"
-    )
-    return found ? wb.Sheets[found] : wb.Sheets[wb.SheetNames[0]]
-  }
+    );
+    return found ? wb.Sheets[found] : wb.Sheets[wb.SheetNames[0]];
+  };
 
   const parseTeller = async (file: File) => {
     try {
-      const data = await file.arrayBuffer()
-      const wb = XLSX.read(data, { type: "array" })
-      const sheet = findCastSheet(wb)
-      const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })
-      const header = raw[0].map((h) => String(h || "").trim())
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, { type: "array" });
+      const sheet = findCastSheet(wb);
+      const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+      const header = raw[0].map((h) => String(h || "").trim());
       const rows = raw.slice(1).map((r) => {
-        const obj: any = {}
+        const obj: any = {};
         header.forEach((h, i) => {
-          obj[h.replace(/\s+/g, "_").toUpperCase()] = r[i]
-        })
+          obj[h.replace(/\s+/g, "_").toUpperCase()] = r[i];
+        });
         return {
           ACCOUNT_NO:
             obj["ACCOUNT_NO"] || obj["ACCOUNT"] || obj["ACCOUNTNUMBER"],
@@ -96,21 +97,21 @@ export function TellerProof() {
           EXPENSE: safeNumber(obj["EXPENSE"]),
           WUMT: safeNumber(obj["WUMT"]),
           Column1: obj["NARRATION"] || "",
-        }
-      })
-      setTellerRows(rows.filter((r) => r.ACCOUNT_NO))
+        };
+      });
+      setTellerRows(rows.filter((r) => r.ACCOUNT_NO));
     } catch {
-      alert("Invalid Teller (CAST) file or missing 'cast' sheet.")
+      alert("Invalid Teller (CAST) file or missing 'cast' sheet.");
     }
-  }
+  };
 
   const parseGL = async (file: File) => {
     try {
-      const data = await file.arrayBuffer()
-      const wb = XLSX.read(data, { type: "array" })
-      const sheet = wb.Sheets[wb.SheetNames[0]]
-      const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })
-      const header = raw[0].map((h) => String(h || "").trim().toLowerCase())
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, { type: "array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+      const header = raw[0].map((h) => String(h || "").trim().toLowerCase());
       const rows = raw.slice(1).map((r) => ({
         Date: String(r[header.findIndex((h) => h.includes("transaction date"))] || ""),
         Branch: String(r[header.findIndex((h) => h.includes("branch"))] || ""),
@@ -123,41 +124,36 @@ export function TellerProof() {
         User: String(r[header.findIndex((h) => h.includes("user"))] || ""),
         Authorizer: String(r[header.findIndex((h) => h.includes("authoriser"))] || ""),
         Reference: String(r[header.findIndex((h) => h.includes("reference"))] || ""),
-      }))
-      setGlRows(rows.filter((r) => r.AccountNo))
-      setFilteredGl(rows.filter((r) => r.AccountNo))
+      }));
+      setGlRows(rows.filter((r) => r.AccountNo));
+      setFilteredGl(rows.filter((r) => r.AccountNo));
     } catch {
-      alert("Invalid GL file format.")
+      alert("Invalid GL file format.");
     }
-  }
+  };
 
   const handleFilter = () => {
     if (!glFilterUser.trim()) {
-      setFilteredGl(glRows)
+      setFilteredGl(glRows);
     } else {
       const filtered = glRows.filter((r) =>
         r.User?.toLowerCase().includes(glFilterUser.toLowerCase())
-      )
-      setFilteredGl(filtered)
+      );
+      setFilteredGl(filtered);
     }
-  }
+  };
 
   const handleExport = () => {
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.json_to_sheet(tellerRows),
-      "Teller"
-    )
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(glRows), "GL")
-    XLSX.writeFile(wb, "TellerProofResult.xlsx")
-  }
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tellerRows), "Teller");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(glRows), "GL");
+    XLSX.writeFile(wb, "TellerProofResult.xlsx");
+  };
 
-  // --- Select rows for preview ---
   const currentData =
     activeTab === "teller_debit" || activeTab === "teller_credit"
       ? tellerRows
-      : filteredGl
+      : filteredGl;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-teal-100 p-6">
@@ -204,17 +200,15 @@ export function TellerProof() {
 
           {/* Tabs */}
           <div className="flex flex-wrap justify-center gap-3 mt-6">
-            {["teller_debit", "teller_credit", "gl_debit", "gl_credit"].map(
-              (tab) => (
-                <Button
-                  key={tab}
-                  variant={activeTab === tab ? "default" : "outline"}
-                  onClick={() => setActiveTab(tab as any)}
-                >
-                  {tab.replace("_", " ").toUpperCase()}
-                </Button>
-              )
-            )}
+            {["teller_debit", "teller_credit", "gl_debit", "gl_credit"].map((tab) => (
+              <Button
+                key={tab}
+                variant={activeTab === tab ? "default" : "outline"}
+                onClick={() => setActiveTab(tab as any)}
+              >
+                {tab.replace("_", " ").toUpperCase()}
+              </Button>
+            ))}
           </div>
 
           {/* GL Filter */}
@@ -250,33 +244,46 @@ export function TellerProof() {
             </div>
           </div>
 
-          {/* Preview Table */}
-          {currentData.length > 0 && (
-            <div className="overflow-auto border rounded-xl bg-white shadow-inner mt-6">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    {Object.keys(currentData[0])
-                      .slice(0, 8)
-                      .map((key) => (
-                        <TableHead key={key}>{key}</TableHead>
-                      ))}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {currentData.slice(0, 10).map((row, i) => (
-                    <TableRow key={i}>
-                      {Object.values(row)
+          {/* Preview Table with smooth transition + scroll */}
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activeTab}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.4 }}
+              className="overflow-x-auto overflow-y-auto max-h-[500px] border rounded-xl bg-white shadow-inner mt-6"
+            >
+              {currentData.length > 0 ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      {Object.keys(currentData[0])
                         .slice(0, 8)
-                        .map((val, j) => (
-                          <TableCell key={j}>{String(val)}</TableCell>
+                        .map((key) => (
+                          <TableHead key={key}>{key}</TableHead>
                         ))}
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
+                  </TableHeader>
+                  <TableBody>
+                    {currentData.map((row, i) => (
+                      <TableRow key={i}>
+                        {Object.values(row)
+                          .slice(0, 8)
+                          .map((val, j) => (
+                            <TableCell key={j}>{String(val)}</TableCell>
+                          ))}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : (
+                <div className="p-8 text-center text-gray-500">
+                  No data available for this view.
+                </div>
+              )}
+            </motion.div>
+          </AnimatePresence>
 
           {/* Actions */}
           <div className="flex justify-center gap-4 mt-8 flex-wrap">
@@ -296,5 +303,5 @@ export function TellerProof() {
         </CardContent>
       </Card>
     </div>
-  )
+  );
 }
