@@ -24,8 +24,27 @@ import {
   TableCell,
 } from "@/components/ui/table";
 
-type TellerRow = Record<string, any> & { __match?: boolean };
-type GLRow = Record<string, any>;
+type TellerRow = Record<string, any> & {
+  ACCOUNT_NO?: string;
+  SAVINGS_WITHDR?: number;
+  CASH_DEP?: number;
+  CASH_DEP_2?: number;
+  FROM_VAULT?: number;
+  TO_VAULT?: number;
+  EXPENSE?: number;
+  WUMT?: number;
+  OPENING_BALANCE?: number;
+  Column1?: string;
+  __match?: boolean;
+};
+
+type GLRow = Record<string, any> & {
+  AccountNo?: string;
+  Amount?: number;
+  Type?: string; // D / C
+  User?: string;
+  __match?: boolean;
+};
 
 const safeNumber = (v: any) => {
   if (v === null || v === undefined || v === "") return 0;
@@ -42,211 +61,269 @@ const findCastSheet = (wb: XLSX.WorkBook) => {
 };
 
 export default function TellerProof(): JSX.Element {
+  // UI state
   const [activeTab, setActiveTab] = useState<
     "teller_debit" | "teller_credit" | "gl_debit" | "gl_credit"
   >("teller_debit");
 
+  // data
   const [tellerRows, setTellerRows] = useState<TellerRow[]>([]);
   const [glRows, setGlRows] = useState<GLRow[]>([]);
-  const [filteredGl, setFilteredGl] = useState<GLRow[]>([]);
+  const [filteredGlRows, setFilteredGlRows] = useState<GLRow[]>([]);
 
+  // meta inputs
   const [tellerName, setTellerName] = useState("");
   const [supervisorName, setSupervisorName] = useState("");
   const [glFilterUser, setGlFilterUser] = useState("");
 
-  // --- file parsing ---
-  const parseTellerFile = async (file: File) => {
+  // parse teller file (sheet 'cast' or fallback)
+  const handleTellerUpload = async (file: File) => {
     try {
       const data = await file.arrayBuffer();
       const wb = XLSX.read(data, { type: "array", cellDates: true });
       const sheet = findCastSheet(wb);
       const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" }) as any[][];
       if (!raw || raw.length === 0) {
-        alert("Teller file appears empty.");
+        alert("Empty Teller file.");
         return;
       }
-      // locate header row (best-effort)
+
+      // find best header row: look for CHEQUES and ACCOUNT tokens
       const headerRowIndex = raw.findIndex((r) =>
-        r.some((c: any) =>
-          String(c || "").toLowerCase().replace(/\s+/g, "").includes("cheques")
-        ) && r.some((c: any) => String(c || "").toLowerCase().replace(/\s+/g, "").includes("account"))
+        Array.isArray(r) &&
+        r.some((c) => String(c || "").toLowerCase().replace(/\s+/g, "").includes("cheques")) &&
+        r.some((c) => String(c || "").toLowerCase().replace(/\s+/g, "").includes("account"))
       );
+
       const header = (headerRowIndex >= 0 ? raw[headerRowIndex] : raw[0]).map((h: any) =>
         String(h || "").trim()
       );
       const dataRows = raw.slice(headerRowIndex >= 0 ? headerRowIndex + 1 : 1);
+
       const parsed: TellerRow[] = dataRows
         .filter((r) => r && r.some((c: any) => String(c || "").trim() !== ""))
-        .map((r, i) => {
-          const obj: any = {};
-          header.forEach((h: string, idx: number) => {
+        .map((r) => {
+          const obj: Record<string, any> = {};
+          header.forEach((h: string, i: number) => {
             const key = String(h || "").trim();
-            if (!key) return;
-            obj[key] = r[idx];
+            if (key) obj[key] = r[i];
           });
-          // Normalize keys used in UI
+
+          // normalize keys we care about (tolerant to many header spellings)
+          const get = (names: string[]) => {
+            for (const n of names) {
+              if (obj[n] !== undefined) return obj[n];
+              const alt = Object.keys(obj).find((k) => k.toLowerCase().replace(/\s+/g, "") === n.toLowerCase().replace(/\s+/g, ""));
+              if (alt) return obj[alt];
+            }
+            return undefined;
+          };
+
           const normalized: TellerRow = {
-            ACCOUNT_NO: obj["ACCOUNT NO"] ?? obj["ACCOUNT_NO"] ?? obj["ACCOUNT"] ?? obj["Account"] ?? "",
-            OPENING_BALANCE: safeNumber(obj["OPENING BALANCE"] ?? obj["OPENING_BALANCE"] ?? obj["Opening Balance"]),
-            CASH_DEP: safeNumber(obj["CASH DEP"] ?? obj["CASH_DEP"] ?? obj["CASHDEP"]),
-            CASH_DEP_2: safeNumber(obj["CASH DEP 2"] ?? obj["CASH_DEP_2"] ?? obj["CASHDEP2"]),
-            SAVINGS_WITHDR: safeNumber(obj["SAVINGS WITHDR."] ?? obj["SAVINGS_WITHDR"] ?? obj["SAVINGSWITHDR"] ?? obj["SAVINGS"]),
-            TO_VAULT: safeNumber(obj["TO VAULT"] ?? obj["TO_VAULT"]),
-            FROM_VAULT: safeNumber(obj["FROM VAULT"] ?? obj["FROM_VAULT"]),
-            EXPENSE: safeNumber(obj["EXPENSE"]),
-            WUMT: safeNumber(obj["WUMT"]),
-            Column1: obj["Column1"] ?? obj["NARRATION"] ?? obj["Narration"] ?? "",
+            ACCOUNT_NO: String(get(["ACCOUNT NO", "ACCOUNT_NO", "ACCOUNT", "Account"]) ?? "").trim(),
+            OPENING_BALANCE: safeNumber(get(["OPENING BALANCE", "OPENING_BALANCE", "Opening Balance"])),
+            CASH_DEP: safeNumber(get(["CASH DEP", "CASH_DEP", "CASHDEP"])),
+            CASH_DEP_2: safeNumber(get(["CASH DEP 2", "CASH_DEP_2", "CASHDEP2"])),
+            SAVINGS_WITHDR: safeNumber(get(["SAVINGS WITHDR.", "SAVINGS_WITHDR", "SAVINGSWITHDR", "SAVINGS"])),
+            TO_VAULT: safeNumber(get(["TO VAULT", "TO_VAULT", "TOVAULT"])),
+            FROM_VAULT: safeNumber(get(["FROM VAULT", "FROM_VAULT", "FROMVAULT"])),
+            EXPENSE: safeNumber(get(["EXPENSE"])),
+            WUMT: safeNumber(get(["WUMT"])),
+            Column1: get(["Column1", "NARRATION", "Narration"]) ?? "",
             __match: false,
           };
+
           return normalized;
         });
+
       setTellerRows(parsed);
     } catch (err) {
       console.error(err);
-      alert("Failed to parse Teller file. Ensure it's a valid Excel/CSV with 'cast' sheet or similar layout.");
+      alert("Failed to parse Teller file. Ensure valid Excel/CSV and sheet contents.");
     }
   };
 
-  const parseGlFile = async (file: File) => {
+  // parse GL file (pick first sheet and detect headers)
+  const handleGlUpload = async (file: File) => {
     try {
       const data = await file.arrayBuffer();
       const wb = XLSX.read(data, { type: "array", cellDates: true });
       const sheet = wb.Sheets[wb.SheetNames[0]];
       const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" }) as any[][];
       if (!raw || raw.length === 0) {
-        alert("GL file appears empty.");
+        alert("Empty GL file.");
         return;
       }
-      // find header row index that contains 'account' and 'transaction' tokens if possible
+
+      // header row detection: prefer row containing 'account' and 'transaction'
       const headerRowIndex = raw.findIndex((r) =>
-        r.some((c: any) => String(c || "").toLowerCase().includes("account")) &&
-        r.some((c: any) => String(c || "").toLowerCase().includes("transaction"))
+        Array.isArray(r) &&
+        r.some((c) => String(c || "").toLowerCase().includes("account")) &&
+        r.some((c) => String(c || "").toLowerCase().includes("transaction"))
       );
+
       const header = (headerRowIndex >= 0 ? raw[headerRowIndex] : raw[0]).map((h: any) =>
         String(h || "").trim().toLowerCase()
       );
       const dataRows = raw.slice(headerRowIndex >= 0 ? headerRowIndex + 1 : 1);
+
+      const findIndex = (candidates: string[]) => {
+        for (const c of candidates) {
+          const idx = header.findIndex((h) => h.includes(c));
+          if (idx >= 0) return idx;
+        }
+        return -1;
+      };
+
+      const idxAccount = findIndex(["accountnumber", "account number", "account no", "account"]);
+      const idxAmount = findIndex(["lcy amount", "lcyamount", "lc y amount", "lcamount", "amount", "lc y"]);
+      const idxDrCr = findIndex(["dr/cr", "drcr", "dr cr", "dr"]);
+      const idxUser = findIndex(["userid", "user id", "user"]);
+      const idxDate = findIndex(["transaction date", "transactiondate", "date"]);
+      const idxBranch = findIndex(["branch name", "branch"]);
+      const idxCurrency = findIndex(["currency"]);
+      const idxAuthorizer = findIndex(["authoriser id", "authoriserid", "authorizer"]);
+      const idxReference = findIndex(["external reference no", "externalreferenceno", "reference"]);
+
       const parsed: GLRow[] = dataRows
         .filter((r) => r && r.some((c: any) => String(c || "").trim() !== ""))
         .map((r) => {
-          const findIndex = (candidates: string[]) => {
-            for (const c of candidates) {
-              const idx = header.findIndex((h) => h.includes(c));
-              if (idx >= 0) return idx;
-            }
-            return -1;
-          };
-          const idxAccount = findIndex(["accountnumber", "account number", "account no", "account"]);
-          const idxAmount = findIndex(["lcy amount", "lcyamount", "amount", "lc y amount", "lcamount"]);
-          const idxDate = findIndex(["transaction date", "transactiondate", "date"]);
-          const idxUser = findIndex(["user id", "userid", "user"]);
-          const idxAuth = findIndex(["authoriser id", "authoriserid", "authorizer"]);
-          const idxDrCr = findIndex(["dr/cr", "drcr"]);
-          const idxCurrency = findIndex(["currency"]);
-          const idxRef = findIndex(["external reference no", "externalreferenceno", "reference", "external reference"]);
+          const account = idxAccount >= 0 ? String(r[idxAccount] ?? "") : "";
+          const amount = idxAmount >= 0 ? safeNumber(r[idxAmount]) : 0;
+          const drcrRaw = idxDrCr >= 0 ? String(r[idxDrCr] ?? "") : "";
+          const drcr = drcrRaw.toUpperCase().includes("D") && !drcrRaw.toUpperCase().includes("C") ? "D" : (drcrRaw.toUpperCase().includes("C") ? "C" : "");
           return {
-            Date: idxDate >= 0 ? r[idxDate] : "",
-            Branch: (header.includes("branch name") ? r[header.indexOf("branch name")] : r[findIndex(["branch"])]) ?? "",
-            AccountNo: idxAccount >= 0 ? String(r[idxAccount] ?? "") : "",
-            Type: idxDrCr >= 0 ? String(r[idxDrCr] ?? "") : "",
+            Date: idxDate >= 0 ? String(r[idxDate] ?? "") : "",
+            Branch: idxBranch >= 0 ? String(r[idxBranch] ?? "") : "",
+            AccountNo: account.trim(),
+            Type: drcr,
             Currency: idxCurrency >= 0 ? String(r[idxCurrency] ?? "") : "",
-            Amount: idxAmount >= 0 ? safeNumber(r[idxAmount]) : 0,
+            Amount: amount,
             User: idxUser >= 0 ? String(r[idxUser] ?? "") : "",
-            Authorizer: idxAuth >= 0 ? String(r[idxAuth] ?? "") : "",
-            Reference: idxRef >= 0 ? String(r[idxRef] ?? "") : "",
+            Authorizer: idxAuthorizer >= 0 ? String(r[idxAuthorizer] ?? "") : "",
+            Reference: idxReference >= 0 ? String(r[idxReference] ?? "") : "",
+            __match: false,
           };
         });
+
       setGlRows(parsed);
-      setFilteredGl(parsed);
+      setFilteredGlRows(parsed);
     } catch (err) {
       console.error(err);
       alert("Failed to parse GL file. Ensure it's a valid Excel/CSV export.");
     }
   };
 
-  // GL filter by user
+  // filter GL by user id
   useEffect(() => {
     if (!glFilterUser.trim()) {
-      setFilteredGl(glRows);
+      setFilteredGlRows(glRows);
       return;
     }
     const q = glFilterUser.trim().toLowerCase();
-    setFilteredGl(glRows.filter((g) => String(g.User || "").toLowerCase().includes(q)));
+    setFilteredGlRows(glRows.filter((g) => String(g.User || "").toLowerCase().includes(q)));
   }, [glFilterUser, glRows]);
 
-  // Matching logic: mark teller rows matched if GL has same AccountNo + Amount
+  // Matching logic for both sides (run whenever GL or teller data changes)
   useEffect(() => {
-    if (tellerRows.length === 0 || filteredGl.length === 0) {
-      // clear matches
-      setTellerRows((prev) => prev.map((r) => ({ ...r, __match: false })));
-      return;
-    }
-    // build map of GL keys => counts
-    const map = new Map<string, number>();
-    filteredGl.forEach((g) => {
-      const key = `${String(g.AccountNo || "").trim()}|${safeNumber(g.Amount)}`;
-      map.set(key, (map.get(key) || 0) + 1);
-    });
-    const updated = tellerRows.map((r) => {
-      const acct = String(r.ACCOUNT_NO || "").trim();
-      // try to infer teller amount from likely fields (savings withdrawal, cash dep, etc.)
-      const amt =
-        safeNumber(r.SAVINGS_WITHDR) ||
-        safeNumber(r.CASH_DEP) ||
-        safeNumber(r.CASH_DEP_2) ||
-        safeNumber(r.FROM_VAULT) ||
-        safeNumber(r.TO_VAULT) ||
-        safeNumber(r.EXPENSE) ||
-        safeNumber(r.WUMT) ||
-        0;
-      const key = `${acct}|${amt}`;
-      const matched = map.get(key) && map.get(key)! > 0;
-      // If matched, decrease count so multiple teller rows don't match same GL row artificially
-      if (matched) {
-        map.set(key, (map.get(key) || 1) - 1);
-      }
-      return { ...r, __match: !!matched };
-    });
-    setTellerRows(updated);
-  }, [filteredGl, tellerRows.length]); // re-run when filtered GL changes or teller rows initially present
+    // build two maps from filtered GL: debit map and credit map
+    const debitMap = new Map<string, number>();
+    const creditMap = new Map<string, number>();
 
-  // Export both sheets to workbook
-  const handleExport = () => {
+    for (const g of filteredGlRows) {
+      const key = `${String(g.AccountNo || "").trim()}|${safeNumber(g.Amount)}`;
+      if ((g.Type || "").toUpperCase() === "D") {
+        debitMap.set(key, (debitMap.get(key) || 0) + 1);
+      } else if ((g.Type || "").toUpperCase() === "C") {
+        creditMap.set(key, (creditMap.get(key) || 0) + 1);
+      } else {
+        // if Type not specified, include in both maps (best-effort) so matches can be found
+        debitMap.set(key, (debitMap.get(key) || 0) + 1);
+        creditMap.set(key, (creditMap.get(key) || 0) + 1);
+      }
+    }
+
+    // match teller rows: compute teller-side debit amount and credit amount, mark __match accordingly
+    const updatedTellers = tellerRows.map((t) => {
+      // teller debit amount usually from savings withdrawal, to_vault, expense
+      const tellerDebit =
+        safeNumber(t.SAVINGS_WITHDR) + safeNumber(t.TO_VAULT) + safeNumber(t.EXPENSE);
+      // teller credit amount from cash dep fields, from vault, wumt
+      const tellerCredit =
+        safeNumber(t.CASH_DEP) + safeNumber(t.CASH_DEP_2) + safeNumber(t.FROM_VAULT) + safeNumber(t.WUMT);
+
+      const acct = String(t.ACCOUNT_NO || "").trim();
+
+      const debitKey = `${acct}|${tellerDebit}`;
+      const creditKey = `${acct}|${tellerCredit}`;
+
+      // preferred match based on activeTab context later, but we mark matched if either side matches
+      const matchedDebit = tellerDebit !== 0 && (debitMap.get(debitKey) || 0) > 0;
+      if (matchedDebit) debitMap.set(debitKey, debitMap.get(debitKey)! - 1);
+
+      const matchedCredit = tellerCredit !== 0 && (creditMap.get(creditKey) || 0) > 0;
+      if (matchedCredit) creditMap.set(creditKey, creditMap.get(creditKey)! - 1);
+
+      // if either matched, mark true
+      return { ...t, __match: !!(matchedDebit || matchedCredit) };
+    });
+
+    setTellerRows(updatedTellers);
+
+    // mark GL rows matched if a teller exists with same key (best-effort)
+    const newGl = filteredGlRows.map((g) => {
+      const key = `${String(g.AccountNo || "").trim()}|${safeNumber(g.Amount)}`;
+      const inTeller = updatedTellers.some((t) => {
+        const tDebit = safeNumber(t.SAVINGS_WITHDR) + safeNumber(t.TO_VAULT) + safeNumber(t.EXPENSE);
+        const tCredit = safeNumber(t.CASH_DEP) + safeNumber(t.CASH_DEP_2) + safeNumber(t.FROM_VAULT) + safeNumber(t.WUMT);
+        return key === `${String(t.ACCOUNT_NO || "").trim()}|${tDebit}` || key === `${String(t.ACCOUNT_NO || "").trim()}|${tCredit}`;
+      });
+      return { ...g, __match: !!inTeller };
+    });
+    setFilteredGlRows(newGl);
+  }, [filteredGlRows.length, glRows.length, tellerRows.length]); // rerun when key arrays change
+
+  // current view data (for preview)
+  const currentPreview = useMemo(() => {
+    if (activeTab.startsWith("teller")) return tellerRows;
+    return filteredGlRows;
+  }, [activeTab, tellerRows, filteredGlRows]);
+
+  // export combined file
+  const handleExportAll = () => {
     const wb = XLSX.utils.book_new();
-    const tSheet = tellerRows.length ? XLSX.utils.json_to_sheet(tellerRows) : XLSX.utils.aoa_to_sheet([["No Teller Data"]]);
-    const gSheet = glRows.length ? XLSX.utils.json_to_sheet(glRows) : XLSX.utils.aoa_to_sheet([["No GL Data"]]);
-    XLSX.utils.book_append_sheet(wb, tSheet, "Teller");
-    XLSX.utils.book_append_sheet(wb, gSheet, "GL");
+    const t = tellerRows.length ? XLSX.utils.json_to_sheet(tellerRows) : XLSX.utils.aoa_to_sheet([["No Teller Data"]]);
+    const g = glRows.length ? XLSX.utils.json_to_sheet(glRows) : XLSX.utils.aoa_to_sheet([["No GL Data"]]);
+    XLSX.utils.book_append_sheet(wb, t, "Teller");
+    XLSX.utils.book_append_sheet(wb, g, "GL");
     XLSX.writeFile(wb, `teller-proof-${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
-  // current preview data
-  const currentData = useMemo(() => {
-    return activeTab.startsWith("teller") ? tellerRows : filteredGl;
-  }, [activeTab, tellerRows, filteredGl]);
-
-  // Helper render table header cells (limit to first 10 columns for readability)
-  const renderTableHeader = (row: Record<string, any>) => {
-    const keys = Object.keys(row).slice(0, 10);
-    // if teller rows, add Match column
-    const extra = activeTab.startsWith("teller") ? ["Match"] : [];
-    return [...keys, ...extra];
+  // helper to produce safe header list
+  const renderHeaders = (row: Record<string, any>) => {
+    const keys = Object.keys(row);
+    // prioritize some human headers if present
+    const preferredOrder = ["ACCOUNT_NO", "AccountNo", "ACCOUNT NO", "Column1", "NARRATION", "Amount", "Type", "User", "Date"];
+    const ordered = Array.from(new Set([...preferredOrder.filter((k) => keys.includes(k)), ...keys]));
+    // limit to first 12 columns to avoid overflow in header row
+    return ordered.slice(0, 12);
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-teal-100 p-6">
       <Card className="max-w-7xl mx-auto shadow-xl border-none rounded-2xl">
         <CardHeader className="bg-gradient-to-r from-blue-600 to-teal-500 text-white rounded-t-2xl p-6">
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
               <CardTitle className="text-2xl font-bold">Teller Proof Dashboard</CardTitle>
               <CardDescription className="text-blue-100">
-                Upload Teller "cast" sheet and GL export — previews, filter and auto-match.
+                Upload Teller (cast) and GL files — switch views, filter GL, and auto-match.
               </CardDescription>
             </div>
+
             <div className="flex gap-2">
-              <Button onClick={handleExport} className="bg-white text-blue-600">
-                <Download className="mr-2 h-4 w-4" /> Export
+              <Button onClick={handleExportAll} className="bg-white text-blue-600">
+                <Download className="mr-2 h-4 w-4" /> Export All
               </Button>
             </div>
           </div>
@@ -257,36 +334,41 @@ export default function TellerProof(): JSX.Element {
           <div className="grid md:grid-cols-2 gap-6">
             <div>
               <Label>Teller (CAST) Sheet</Label>
-              <Input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => e.target.files?.[0] && parseTellerFile(e.target.files[0])} />
+              <Input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => e.target.files?.[0] && handleTellerUpload(e.target.files[0])} />
               {tellerRows.length > 0 && <Badge className="mt-2 bg-green-600">{tellerRows.length} Teller Rows Loaded</Badge>}
             </div>
 
             <div>
               <Label>GL Sheet</Label>
-              <Input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => e.target.files?.[0] && parseGlFile(e.target.files[0])} />
+              <Input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => e.target.files?.[0] && handleGlUpload(e.target.files[0])} />
               {glRows.length > 0 && <Badge className="mt-2 bg-blue-600">{glRows.length} GL Rows Loaded</Badge>}
             </div>
           </div>
 
-          {/* View Buttons */}
+          {/* Tabs / View Buttons */}
           <div className="flex flex-wrap justify-center gap-3 mt-6">
-            {["teller_debit", "teller_credit", "gl_debit", "gl_credit"].map((tab) => (
+            {[
+              { key: "teller_debit", label: "Teller Debit" },
+              { key: "teller_credit", label: "Teller Credit" },
+              { key: "gl_debit", label: "GL Debit" },
+              { key: "gl_credit", label: "GL Credit" },
+            ].map((t) => (
               <button
-                key={tab}
-                onClick={() => setActiveTab(tab as any)}
+                key={t.key}
+                onClick={() => setActiveTab(t.key as any)}
                 className={`px-3 py-1 rounded-md text-sm font-medium transition-all ${
-                  activeTab === tab ? "bg-gradient-to-r from-sky-600 to-teal-400 text-white shadow-lg" : "bg-transparent text-muted-foreground hover:bg-muted/10"
+                  activeTab === t.key ? "bg-gradient-to-r from-sky-600 to-teal-400 text-white shadow-lg" : "bg-transparent text-muted-foreground hover:bg-muted/10"
                 }`}
               >
-                {tab.replace("_", " ").toUpperCase()}
+                {t.label}
               </button>
             ))}
           </div>
 
-          {/* GL Filter (visible on GL tabs) */}
-          {activeTab.includes("gl") && (
-            <div className="flex flex-wrap gap-3 items-center justify-center mt-4">
-              <Input placeholder="Filter by User ID" value={glFilterUser} onChange={(e) => setGlFilterUser(e.target.value)} className="w-60" />
+          {/* GL Filter */}
+          {activeTab.startsWith("gl") && (
+            <div className="flex items-center justify-center gap-3 mt-4">
+              <Input placeholder="Filter GL by User ID" value={glFilterUser} onChange={(e) => setGlFilterUser(e.target.value)} className="w-64" />
               <Button onClick={() => setGlFilterUser("")} variant="outline">Clear</Button>
             </div>
           )}
@@ -303,32 +385,35 @@ export default function TellerProof(): JSX.Element {
             </div>
           </div>
 
-          {/* Preview (scrollable) */}
-          <div className="overflow-auto border rounded-xl bg-white shadow-inner mt-6 max-h-[620px]">
-            {currentData.length === 0 ? (
-              <div className="p-8 text-center text-gray-500">No data for this view.</div>
+          {/* Preview area (scrollable) */}
+          <div className="overflow-auto border rounded-xl bg-white shadow-inner mt-6 max-h-[720px]">
+            {currentPreview.length === 0 ? (
+              <div className="p-8 text-center text-gray-500">No data available for this view.</div>
             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
-                    {renderTableHeader(currentData[0]).map((h) => (
+                    {renderHeaders(currentPreview[0]).map((h) => (
                       <TableHead key={h}>{h}</TableHead>
                     ))}
+                    {activeTab.startsWith("teller") && <TableHead>Match</TableHead>}
                   </TableRow>
                 </TableHeader>
 
                 <TableBody>
-                  {currentData.map((row, idx) => {
-                    const keys = Object.keys(row).slice(0, 10);
+                  {currentPreview.map((row, rIdx) => {
+                    const headers = renderHeaders(row);
+                    // highlight row if matched (teller) or if GL matched
+                    const isMatched = !!row.__match;
                     return (
-                      <TableRow key={idx} className={activeTab.startsWith("teller") && row.__match ? "bg-green-50" : ""}>
-                        {keys.map((k) => (
+                      <TableRow key={rIdx} className={isMatched ? "bg-green-50" : ""}>
+                        {headers.map((k) => (
                           <TableCell key={k}>{String(row[k] ?? "")}</TableCell>
                         ))}
                         {activeTab.startsWith("teller") && (
                           <TableCell>
-                            {row.__match ? (
-                              <Badge className="bg-green-100 text-green-700">Matched</Badge>
+                            {isMatched ? (
+                              <Badge className="bg-green-100 text-green-800">Matched</Badge>
                             ) : (
                               <Badge variant="outline" className="text-destructive">Unmatched</Badge>
                             )}
@@ -344,10 +429,11 @@ export default function TellerProof(): JSX.Element {
 
           {/* Actions */}
           <div className="flex justify-center gap-4 mt-8 flex-wrap">
-            <Button onClick={handleExport} className="bg-gradient-to-r from-blue-600 to-teal-500 text-white">
+            <Button onClick={handleExportAll} className="bg-gradient-to-r from-blue-600 to-teal-500 text-white">
               <Download className="mr-2 h-4 w-4" /> Export Result
             </Button>
-            <Button variant="outline" onClick={() => alert("Submitted Successfully ✅")}>Dummy Submit</Button>
+
+            <Button variant="outline" onClick={() => alert("Dummy Submit Successful ✅")}>Dummy Submit</Button>
           </div>
         </CardContent>
       </Card>
