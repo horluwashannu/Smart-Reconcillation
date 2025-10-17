@@ -73,13 +73,21 @@ export function TellerProof() {
     return Number.isFinite(n) ? n : 0
   }
 
-  // --- Teller Upload Parsing ---
-  // New: parse rows in format:
-  // WITHDRAWAL AMOUNT | ACCOUNT NUMBER | DEPOSIT AMOUNT | ACCOUNT NUMBER | EXPENSE | WUMT
+  // --- Teller Upload Parsing (new robust version) ---
+  // Accepts header variations and any file/sheet name.
+  // Expected columns (case-insensitive, keyword-based):
+  // "withdrawal" / "withdrawal amount" / "withdrawal acct"
+  // "withdrawal account"
+  // "deposit" / "deposit amount"
+  // "deposit account"
+  // "expense"
+  // "wumt" / "w/m/t"
   const parseTellerUpload = async (file: File) => {
     try {
       const data = await file.arrayBuffer()
       const wb = XLSX.read(data, { type: "array" })
+
+      // Choose the first sheet (works even if sheet name varies)
       const sheet = wb.Sheets[wb.SheetNames[0]]
       const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })
 
@@ -88,12 +96,12 @@ export function TellerProof() {
         return
       }
 
-      // Normalize header row to lowercase trimmed strings for robust matching
+      // Normalize header row for keyword matching
       const headerRow = (raw[0] || []).map((h: any) =>
         String(h || "").trim().toLowerCase()
       )
 
-      // Helper: find index by keyword(s)
+      // Helper to find index by keywords
       const findIndexByKeywords = (keywords: string[]) => {
         for (let i = 0; i < headerRow.length; i++) {
           const h = headerRow[i]
@@ -105,39 +113,79 @@ export function TellerProof() {
         return -1
       }
 
-      // Find columns
-      const idxWithdrawal = findIndexByKeywords(["withdraw", "withdrawal", "withd"])
-      // There may be two account columns; collect all indexes that look like account
+      // Find indexes for amounts and accounts
+      const idxWithdrawalAmount = findIndexByKeywords([
+        "withdrawal amount",
+        "withdrawal",
+        "withdraw amt",
+        "withdraw amt.",
+        "withd",
+      ])
+      const idxWithdrawalAccount = findIndexByKeywords([
+        "withdrawal account",
+        "withdrawal acct",
+        "withdraw acct",
+        "withdraw account",
+        "withdrawal acc",
+      ])
+
+      const idxDepositAmount = findIndexByKeywords([
+        "deposit amount",
+        "deposit",
+        "deposit amt",
+        "depos",
+      ])
+      const idxDepositAccount = findIndexByKeywords([
+        "deposit account",
+        "deposit acct",
+        "deposit acc",
+        "deposit no",
+      ])
+
+      const idxExpense = findIndexByKeywords(["expense", "expenses"])
+      const idxWumt = findIndexByKeywords(["wumt", "w/m/t", "wmt"])
+
+      // As fallback: if account indexes not found, find any "account" columns
       const accountIndexes: number[] = []
       headerRow.forEach((h: string, i: number) => {
         if (h.includes("account") || h.includes("acct") || h.includes("account number")) {
           accountIndexes.push(i)
         }
       })
-      // deposit might be called "deposit amount" or "deposit"
-      const idxDeposit = findIndexByKeywords(["deposit", "depos"])
-      const idxExpense = findIndexByKeywords(["expense", "expenses"])
-      const idxWumt = findIndexByKeywords(["wumt", "w/m/t", "wmt"])
 
-      // If accountIndexes is empty, try fallback to near-by columns (common positions)
-      // We will map: withdrawal account -> first account index, deposit account -> second account index if present, else first
-      const acctIdxForWithdrawal = accountIndexes[0] ?? -1
-      const acctIdxForDeposit = accountIndexes[1] ?? accountIndexes[0] ?? -1
+      const acctIdxWithdrawalFinal =
+        idxWithdrawalAccount >= 0
+          ? idxWithdrawalAccount
+          : accountIndexes.length > 0
+          ? accountIndexes[0]
+          : -1
+
+      const acctIdxDepositFinal =
+        idxDepositAccount >= 0
+          ? idxDepositAccount
+          : accountIndexes.length > 1
+          ? accountIndexes[1]
+          : accountIndexes.length > 0
+          ? accountIndexes[0]
+          : -1
 
       const rows: TellerRow[] = []
 
-      // Iterate data rows (starting from second row)
+      // Iterate rows (data starts at row index 1)
       raw.slice(1).forEach((r: any[]) => {
-        // read by index positions we found (fall back to empty string)
-        const withdrawalVal = idxWithdrawal >= 0 ? safeNumber(r[idxWithdrawal]) : 0
-        const depositVal = idxDeposit >= 0 ? safeNumber(r[idxDeposit]) : 0
+        const withdrawalVal =
+          idxWithdrawalAmount >= 0 ? safeNumber(r[idxWithdrawalAmount]) : 0
+        const depositVal = idxDepositAmount >= 0 ? safeNumber(r[idxDepositAmount]) : 0
         const expenseVal = idxExpense >= 0 ? safeNumber(r[idxExpense]) : 0
         const wumtVal = idxWumt >= 0 ? safeNumber(r[idxWumt]) : 0
 
-        const acctWithdrawal = acctIdxForWithdrawal >= 0 ? String(r[acctIdxForWithdrawal] || "").trim() : ""
-        const acctDeposit = acctIdxForDeposit >= 0 ? String(r[acctIdxForDeposit] || "").trim() : acctWithdrawal
+        // Get account numbers - fallback sensibly
+        const acctWithdrawal =
+          acctIdxWithdrawalFinal >= 0 ? String(r[acctIdxWithdrawalFinal] || "").trim() : ""
+        const acctDeposit =
+          acctIdxDepositFinal >= 0 ? String(r[acctIdxDepositFinal] || "").trim() : acctWithdrawal
 
-        // Push withdrawal row (if any)
+        // Push rows for each non-zero item
         if (withdrawalVal > 0) {
           rows.push({
             ACCOUNT_NO: acctWithdrawal || "",
@@ -145,7 +193,6 @@ export function TellerProof() {
           })
         }
 
-        // Push deposit row (if any)
         if (depositVal > 0) {
           rows.push({
             ACCOUNT_NO: acctDeposit || acctWithdrawal || "",
@@ -153,7 +200,6 @@ export function TellerProof() {
           })
         }
 
-        // Push expense row (if any) - attach to withdrawal account if deposit account not appropriate
         if (expenseVal > 0) {
           rows.push({
             ACCOUNT_NO: acctWithdrawal || acctDeposit || "",
@@ -161,7 +207,6 @@ export function TellerProof() {
           })
         }
 
-        // Push WUMT row (if any)
         if (wumtVal > 0) {
           rows.push({
             ACCOUNT_NO: acctWithdrawal || acctDeposit || "",
@@ -179,7 +224,7 @@ export function TellerProof() {
     }
   }
 
-  // --- GL Parsing (Updated for your Excel format) ---
+  // --- GL Parsing (unchanged) ---
   const parseGL = async (file: File) => {
     try {
       const data = await file.arrayBuffer()
@@ -197,7 +242,7 @@ export function TellerProof() {
         const drcr = String(r[header.findIndex((h) => h.includes("dr"))] || "").toUpperCase()
         const amount = safeNumber(
           r[header.findIndex((h) => h.includes("lcy amount"))] ||
-          r[header.findIndex((h) => h.includes("amount"))]
+            r[header.findIndex((h) => h.includes("amount"))]
         )
         const date = String(r[header.findIndex((h) => h.includes("transaction date"))] || "")
         const user = String(r[header.findIndex((h) => h.includes("user"))] || "")
@@ -293,16 +338,26 @@ export function TellerProof() {
 
   useEffect(() => recalcTotals(), [tellerRows, glRows, buyAmount, sellAmount])
 
-  // --- Data switching logic (keeps your activeTab pattern) ---
+  // --- Data switching logic (teller and gl filters) ---
   const currentData =
     activeTab === "gl_debit"
       ? filteredGl.filter((r) => r.Type === "DEBIT")
       : activeTab === "gl_credit"
       ? filteredGl.filter((r) => r.Type === "CREDIT")
-      : tellerRows
+      : activeTab === "teller_debit"
+      ? // show only withdrawal rows for teller_debit
+        tellerRows.filter((r) => safeNumber(r.WITHDRAWAL) > 0)
+      : // teller_credit -> show only deposit rows
+        tellerRows.filter((r) => safeNumber(r.DEPOSIT) > 0)
 
   // Keep header structure from currentData for table columns
-  const currentKeys = currentData.length > 0 ? Object.keys(currentData[0]) : []
+  // For tellerRows we want fixed column order: ACCOUNT_NO, WITHDRAWAL, DEPOSIT, EXPENSE, WUMT
+  const currentKeys =
+    activeTab === "teller_debit" || activeTab === "teller_credit"
+      ? ["ACCOUNT_NO", activeTab === "teller_debit" ? "WITHDRAWAL" : "DEPOSIT", "EXPENSE", "WUMT"]
+      : currentData.length > 0
+      ? Object.keys(currentData[0])
+      : []
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-800 p-6">
@@ -461,14 +516,27 @@ export function TellerProof() {
               </div>
             ) : (
               <>
+                {/* Show full teller totals, and highlight relevant one depending on tab */}
                 <div className="grid md:grid-cols-3 gap-4">
-                  <div>Total Withdrawal: {totals.withdrawal.toLocaleString()}</div>
-                  <div>Total Deposit: {totals.deposit.toLocaleString()}</div>
-                  <div>Total Expenses: {totals.expense.toLocaleString()}</div>
+                  <div>
+                    Total Withdrawal:{" "}
+                    <strong>₦{totals.withdrawal.toLocaleString()}</strong>
+                    {activeTab === "teller_debit" && (
+                      <div className="text-sm text-gray-600 mt-1">Showing withdrawals only</div>
+                    )}
+                  </div>
+                  <div>
+                    Total Deposit:{" "}
+                    <strong>₦{totals.deposit.toLocaleString()}</strong>
+                    {activeTab === "teller_credit" && (
+                      <div className="text-sm text-gray-600 mt-1">Showing deposits only</div>
+                    )}
+                  </div>
+                  <div>Total Expenses: ₦{totals.expense.toLocaleString()}</div>
                 </div>
                 <div className="grid md:grid-cols-2 gap-4 mt-2">
-                  <div>Total WUMT: {totals.wumt.toLocaleString()}</div>
-                  <div>Buy/Sell Diff: {(totals.buy - totals.sell).toLocaleString()}</div>
+                  <div>Total WUMT: ₦{totals.wumt.toLocaleString()}</div>
+                  <div>Buy/Sell Diff: ₦{(totals.buy - totals.sell).toLocaleString()}</div>
                 </div>
               </>
             )}
