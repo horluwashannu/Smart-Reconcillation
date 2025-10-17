@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import * as XLSX from "xlsx"
 import {
   Card,
@@ -13,7 +13,6 @@ import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Download } from "lucide-react"
 import {
   Table,
   TableHeader,
@@ -22,6 +21,7 @@ import {
   TableBody,
   TableCell,
 } from "@/components/ui/table"
+import { Download } from "lucide-react"
 
 type GLRow = {
   Date?: string
@@ -33,7 +33,14 @@ type GLRow = {
   User?: string
   Authorizer?: string
   Reference?: string
-  Exceptions?: string[] // Added field
+  // Exception fields
+  noBVN?: boolean
+  noSignature?: boolean
+  alteration?: boolean
+  noDate?: boolean
+  noAnalysis?: boolean
+  wrongNarration?: boolean
+  regularized?: boolean
 }
 
 export function TellerProof() {
@@ -54,27 +61,31 @@ export function TellerProof() {
       const wb = XLSX.read(data, { type: "array" })
       const sheet = wb.Sheets[wb.SheetNames[0]]
       const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })
+
       const header = raw[0].map((h) => String(h || "").trim().toLowerCase())
 
       const rows: GLRow[] = raw.slice(1).map((r) => ({
-        Date: String(r[header.findIndex((h) => h.includes("transaction date"))] || ""),
+        Date: String(r[header.findIndex((h) => h.includes("date"))] || ""),
         Branch: String(r[header.findIndex((h) => h.includes("branch"))] || ""),
         AccountNo: String(r[header.findIndex((h) => h.includes("account"))] || ""),
         Type: String(r[header.findIndex((h) => h.includes("dr/cr"))] || ""),
         Currency: String(r[header.findIndex((h) => h.includes("currency"))] || ""),
-        Amount: safeNumber(
-          r[header.findIndex((h) => h.includes("lcy amount") || h.includes("amount"))]
-        ),
+        Amount: safeNumber(r[header.findIndex((h) => h.includes("amount"))]),
         User: String(r[header.findIndex((h) => h.includes("user"))] || ""),
         Authorizer: String(r[header.findIndex((h) => h.includes("authoriser"))] || ""),
         Reference: String(r[header.findIndex((h) => h.includes("reference"))] || ""),
-        Exceptions: ["None"], // Default exception
+        noBVN: false,
+        noSignature: false,
+        alteration: false,
+        noDate: false,
+        noAnalysis: false,
+        wrongNarration: false,
+        regularized: false,
       }))
 
-      const validRows = rows.filter((r) => r.AccountNo)
-      setGlRows(validRows)
-      setFilteredGl(validRows)
-      alert(`${validRows.length} GL Rows Loaded ✅`)
+      setGlRows(rows.filter((r) => r.AccountNo))
+      setFilteredGl(rows.filter((r) => r.AccountNo))
+      alert(`${rows.length} GL Rows Loaded ✅`)
     } catch {
       alert("Invalid GL file format.")
     }
@@ -92,116 +103,153 @@ export function TellerProof() {
     }
   }
 
-  // --- Exception Update ---
-  const toggleException = (rowIndex: number, exception: string) => {
-    setFilteredGl((prev) =>
-      prev.map((row, i) => {
-        if (i !== rowIndex) return row
-        const exists = row.Exceptions?.includes(exception)
-        let updated = exists
-          ? row.Exceptions?.filter((e) => e !== exception)
-          : [...(row.Exceptions || []), exception]
-
-        if (updated.length === 0) updated = ["None"]
-        if (updated.includes("None") && updated.length > 1)
-          updated = updated.filter((e) => e !== "None")
-
-        return { ...row, Exceptions: updated }
-      })
-    )
+  // --- Exception Toggle ---
+  const toggleException = (i: number, key: keyof GLRow) => {
+    setFilteredGl((prev) => {
+      const copy = [...prev]
+      // @ts-ignore
+      copy[i][key] = !copy[i][key]
+      return copy
+    })
   }
 
-  // --- Color Logic ---
-  const getRowColor = (exceptions: string[] = []) => {
-    if (exceptions.length === 1 && exceptions[0] === "None") return "bg-green-100"
-    if (exceptions.length === 1) return "bg-yellow-100"
-    if (exceptions.length > 1) return "bg-red-100"
+  // --- Regularization Toggle ---
+  const toggleRegularized = (i: number) => {
+    setFilteredGl((prev) => {
+      const copy = [...prev]
+      copy[i].regularized = !copy[i].regularized
+      return copy
+    })
+  }
+
+  // --- Row Color based on Flags ---
+  const getRowColor = (row: GLRow) => {
+    const flags = [
+      row.noBVN,
+      row.noSignature,
+      row.alteration,
+      row.noDate,
+      row.noAnalysis,
+      row.wrongNarration,
+    ].filter(Boolean).length
+
+    if (flags >= 2) return "bg-red-200 dark:bg-red-800"
+    if (flags === 1) return "bg-yellow-200 dark:bg-yellow-700"
     return ""
   }
 
-  // --- Export Result ---
+  // --- Export ---
   const handleExport = () => {
     const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.json_to_sheet(filteredGl),
-      "GL Exceptions"
-    )
-    XLSX.writeFile(wb, "GL_Exceptions_Report.xlsx")
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filteredGl), "GL Reviewed")
+    XLSX.writeFile(wb, "GL_Review_Result.xlsx")
+  }
+
+  // --- Dummy Submit ---
+  const handleSubmit = () => {
+    alert("All GL entries reviewed and submitted successfully ✅")
   }
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-800 p-6">
       <Card className="max-w-7xl mx-auto shadow-xl border-none rounded-2xl">
         <CardHeader className="bg-gradient-to-r from-blue-600 to-teal-500 text-white rounded-t-2xl p-6">
-          <CardTitle className="text-2xl font-bold">GL Exception Review</CardTitle>
+          <CardTitle className="text-2xl font-bold">GL Proof Dashboard</CardTitle>
           <CardDescription className="text-blue-100">
-            Upload GL File and Tag Exceptions
+            Upload GL files and mark exceptions (No BVN, No Signature, etc.)
           </CardDescription>
         </CardHeader>
-
         <CardContent className="p-6 space-y-6">
-          {/* Upload Section */}
-          <div>
-            <Label>GL Upload</Label>
-            <Input
-              type="file"
-              accept=".xlsx,.xls,.csv"
-              onChange={(e) => e.target.files?.[0] && parseGL(e.target.files[0])}
-            />
-            {glRows.length > 0 && (
-              <Badge className="mt-2 bg-blue-600">{glRows.length} Rows Loaded</Badge>
-            )}
+          {/* Upload */}
+          <div className="grid md:grid-cols-2 gap-6">
+            <div>
+              <Label>GL Upload</Label>
+              <Input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                onChange={(e) => e.target.files?.[0] && parseGL(e.target.files[0])}
+              />
+              {glRows.length > 0 && (
+                <Badge className="mt-2 bg-blue-600">{glRows.length} GL Rows Loaded</Badge>
+              )}
+            </div>
+            <div className="flex flex-col justify-end">
+              <Label>Filter by User</Label>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Enter User ID"
+                  value={glFilterUser}
+                  onChange={(e) => setGlFilterUser(e.target.value)}
+                  className="w-60"
+                />
+                <Button onClick={handleFilter}>Filter</Button>
+              </div>
+            </div>
           </div>
 
-          {/* Filter Section */}
-          {glRows.length > 0 && (
-            <div className="flex flex-wrap gap-3 items-center justify-center mt-4">
-              <Input
-                placeholder="Filter by User ID"
-                value={glFilterUser}
-                onChange={(e) => setGlFilterUser(e.target.value)}
-                className="w-60"
-              />
-              <Button onClick={handleFilter}>Filter</Button>
-            </div>
-          )}
-
-          {/* GL Table */}
+          {/* Table */}
           {filteredGl.length > 0 && (
-            <div className="overflow-auto border rounded-xl bg-white dark:bg-gray-700 shadow-inner mt-6 max-h-[65vh]">
+            <div className="overflow-auto border rounded-xl bg-white dark:bg-gray-700 shadow-inner mt-6 max-h-[70vh]">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    {Object.keys(filteredGl[0])
-                      .filter((key) => key !== "Exceptions")
-                      .map((key) => (
-                        <TableHead key={key}>{key}</TableHead>
-                      ))}
-                    <TableHead>Exceptions</TableHead>
+                    {[
+                      "Date",
+                      "Branch",
+                      "AccountNo",
+                      "Type",
+                      "Currency",
+                      "Amount",
+                      "User",
+                      "Authorizer",
+                      "Reference",
+                      "No BVN",
+                      "No Signature",
+                      "Alteration",
+                      "No Date",
+                      "No Analysis",
+                      "Wrong Narration",
+                      "Regularized?",
+                    ].map((col) => (
+                      <TableHead key={col}>{col}</TableHead>
+                    ))}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredGl.map((row, i) => (
-                    <TableRow key={i} className={getRowColor(row.Exceptions)}>
-                      {Object.keys(row)
-                        .filter((key) => key !== "Exceptions")
-                        .map((key, j) => (
-                          <TableCell key={j}>{String((row as any)[key])}</TableCell>
-                        ))}
+                    <TableRow key={i} className={getRowColor(row)}>
+                      <TableCell>{row.Date}</TableCell>
+                      <TableCell>{row.Branch}</TableCell>
+                      <TableCell>{row.AccountNo}</TableCell>
+                      <TableCell>{row.Type}</TableCell>
+                      <TableCell>{row.Currency}</TableCell>
+                      <TableCell>{row.Amount?.toLocaleString()}</TableCell>
+                      <TableCell>{row.User}</TableCell>
+                      <TableCell>{row.Authorizer}</TableCell>
+                      <TableCell>{row.Reference}</TableCell>
+
+                      {[
+                        "noBVN",
+                        "noSignature",
+                        "alteration",
+                        "noDate",
+                        "noAnalysis",
+                        "wrongNarration",
+                      ].map((key) => (
+                        <TableCell key={key}>
+                          <input
+                            type="checkbox"
+                            checked={row[key as keyof GLRow] as boolean}
+                            onChange={() => toggleException(i, key as keyof GLRow)}
+                          />
+                        </TableCell>
+                      ))}
                       <TableCell>
-                        {["None", "No BVN", "No Signature", "No Analysis", "No Mandate", "Other"].map(
-                          (ex) => (
-                            <label key={ex} className="flex items-center gap-1 text-xs">
-                              <input
-                                type="checkbox"
-                                checked={row.Exceptions?.includes(ex) || false}
-                                onChange={() => toggleException(i, ex)}
-                              />
-                              {ex}
-                            </label>
-                          )
-                        )}
+                        <input
+                          type="checkbox"
+                          checked={row.regularized}
+                          onChange={() => toggleRegularized(i)}
+                        />
                       </TableCell>
                     </TableRow>
                   ))}
@@ -217,9 +265,9 @@ export function TellerProof() {
                 onClick={handleExport}
                 className="bg-gradient-to-r from-blue-600 to-teal-500 text-white"
               >
-                <Download className="mr-2 h-4 w-4" /> Export Exceptions
+                <Download className="mr-2 h-4 w-4" /> Export Reviewed GL
               </Button>
-              <Button variant="outline" onClick={() => alert("Submitted Successfully ✅")}>
+              <Button variant="outline" onClick={handleSubmit}>
                 Dummy Submit
               </Button>
             </div>
