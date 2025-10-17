@@ -1,5 +1,6 @@
 "use client"
-import { useState } from "react"
+
+import { useState, useEffect } from "react"
 import * as XLSX from "xlsx"
 import {
   Card,
@@ -13,145 +14,530 @@ import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Download } from "lucide-react"
+import {
+  Table,
+  TableHeader,
+  TableRow,
+  TableHead,
+  TableBody,
+  TableCell,
+} from "@/components/ui/table"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 
-export default function TellerProofGL() {
-  const [data, setData] = useState<any[]>([])
-  const [filter, setFilter] = useState<"Debit" | "Credit" | "All">("All")
+type TellerRow = {
+  ACCOUNT_NO?: string
+  WITHDRAWAL?: number
+  DEPOSIT?: number
+  EXPENSE?: number
+  WUMT?: number
+}
 
-  // Handle Excel Upload
-  const handleFileUpload = (e: any) => {
-    const file = e.target.files[0]
-    if (!file) return
+type GLRow = {
+  Date?: string
+  Branch?: string
+  AccountNo?: string
+  Type?: string
+  Currency?: string
+  Amount?: number
+  User?: string
+  Authorizer?: string
+  Reference?: string
+}
 
-    const reader = new FileReader()
-    reader.onload = (evt) => {
-      const bstr = evt.target?.result
-      const wb = XLSX.read(bstr, { type: "binary" })
-      const wsname = wb.SheetNames[0]
-      const ws = wb.Sheets[wsname]
-      const jsonData: any[] = XLSX.utils.sheet_to_json(ws, { defval: "" })
-      setData(jsonData)
+export function TellerProof() {
+  const [activeTab, setActiveTab] = useState<
+    "teller_debit" | "teller_credit" | "gl_debit" | "gl_credit"
+  >("teller_debit")
+
+  const [tellerRows, setTellerRows] = useState<TellerRow[]>([])
+  const [castRows, setCastRows] = useState<TellerRow[]>([])
+  const [glRows, setGlRows] = useState<GLRow[]>([])
+  const [filteredGl, setFilteredGl] = useState<GLRow[]>([])
+
+  const [tellerName, setTellerName] = useState("")
+  const [supervisorName, setSupervisorName] = useState("")
+  const [glFilterUser, setGlFilterUser] = useState("")
+  const [openCast, setOpenCast] = useState(false)
+  const [openPendingGL, setOpenPendingGL] = useState(false)
+  const [buyAmount, setBuyAmount] = useState<number>(0)
+  const [sellAmount, setSellAmount] = useState<number>(0)
+
+  const safeNumber = (v: any) => {
+    const s = String(v || "").replace(/[,₦$]/g, "").trim()
+    const n = Number(s)
+    return Number.isFinite(n) ? n : 0
+  }
+
+  // --- Teller Upload Parsing ---
+  const parseTellerUpload = async (file: File) => {
+    try {
+      const data = await file.arrayBuffer()
+      const wb = XLSX.read(data, { type: "array" })
+      const sheet = wb.Sheets[wb.SheetNames[0]]
+      const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })
+      const header = raw[0]
+        .map((h) =>
+          String(h || "")
+            .replace(/\s+/g, "_")
+            .replace(/\(N\)/g, "")
+            .toUpperCase()
+        )
+
+      const rows: TellerRow[] = []
+      raw.slice(1).forEach((r) => {
+        const obj: any = {}
+        header.forEach((h, i) => {
+          obj[h] = r[i]
+        })
+
+        if (safeNumber(obj["CHEQUES"]) > 0)
+          rows.push({ ACCOUNT_NO: obj["ACCOUNT_NO"] || "", WITHDRAWAL: safeNumber(obj["CHEQUES"]) })
+        if (safeNumber(obj["SAVINGS"]) > 0)
+          rows.push({ ACCOUNT_NO: obj["ACCOUNT_NO_2"] || "", WITHDRAWAL: safeNumber(obj["SAVINGS"]) })
+        if (safeNumber(obj["DEPOSIT"]) > 0)
+          rows.push({ ACCOUNT_NO: obj["ACCOUNT_NO_3"] || "", DEPOSIT: safeNumber(obj["DEPOSIT"]) })
+        if (safeNumber(obj["EXPENSE"]) > 0)
+          rows.push({ ACCOUNT_NO: obj["ACCOUNT_NO_4"] || "", EXPENSE: safeNumber(obj["EXPENSE"]) })
+        if (safeNumber(obj["WUMT"]) > 0)
+          rows.push({ ACCOUNT_NO: obj["ACCOUNT_NO_5"] || "", WUMT: safeNumber(obj["WUMT"]) })
+      })
+
+      setTellerRows(rows)
+      recalcTotals()
+      alert(`${rows.length} Teller Rows Loaded ✅`)
+    } catch (err) {
+      console.error(err)
+      alert("Invalid Teller file or column mismatch")
     }
-    reader.readAsBinaryString(file)
   }
 
-  // Apply filter
-  const filteredData =
-    filter === "All" ? data : data.filter((row) => row.DebitCredit === filter)
+  // --- GL Parsing (Updated for your Excel format) ---
+  const parseGL = async (file: File) => {
+    try {
+      const data = await file.arrayBuffer()
+      const wb = XLSX.read(data, { type: "array" })
+      const sheet = wb.Sheets[wb.SheetNames[0]]
+      const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })
+      const header = raw[0].map((h) => String(h || "").trim().toLowerCase())
 
-  // Calculate totals
-  const totalDebit = data
-    .filter((row) => row.DebitCredit === "Debit")
-    .reduce((acc, row) => acc + (parseFloat(row.Amount) || 0), 0)
+      const rows: GLRow[] = raw.slice(1).map((r) => {
+        const branch = String(r[header.findIndex((h) => h.includes("branch"))] || "")
+        const product = String(r[header.findIndex((h) => h.includes("product"))] || "")
+        const acct = String(r[header.findIndex((h) => h.includes("account"))] || "")
+        const narration = String(r[header.findIndex((h) => h.includes("narration"))] || "")
+        const currency = String(r[header.findIndex((h) => h.includes("currency"))] || "")
+        const drcr = String(r[header.findIndex((h) => h.includes("dr"))] || "").toUpperCase()
+        const amount = safeNumber(
+          r[header.findIndex((h) => h.includes("lcy amount"))] ||
+          r[header.findIndex((h) => h.includes("amount"))]
+        )
+        const date = String(r[header.findIndex((h) => h.includes("transaction date"))] || "")
+        const user = String(r[header.findIndex((h) => h.includes("user"))] || "")
+        const auth = String(r[header.findIndex((h) => h.includes("authoriser"))] || "")
 
-  const totalCredit = data
-    .filter((row) => row.DebitCredit === "Credit")
-    .reduce((acc, row) => acc + (parseFloat(row.Amount) || 0), 0)
+        return {
+          Date: date,
+          Branch: branch,
+          AccountNo: acct,
+          Type: drcr === "D" ? "DEBIT" : drcr === "C" ? "CREDIT" : "",
+          Currency: currency,
+          Amount: amount,
+          User: user,
+          Authorizer: auth,
+          Reference: narration,
+        }
+      })
 
-  // Export filtered to Excel
-  const exportToExcel = () => {
-    const ws = XLSX.utils.json_to_sheet(filteredData)
+      const validRows = rows.filter((r) => r.AccountNo && r.Type)
+      setGlRows(validRows)
+      setFilteredGl(validRows)
+
+      alert(`${validRows.length} GL Rows Loaded ✅`)
+    } catch (err) {
+      console.error(err)
+      alert("Invalid GL file format or missing required columns.")
+    }
+  }
+
+  // --- GL Filter by User ID ---
+  const handleFilter = () => {
+    if (!glFilterUser.trim()) {
+      setFilteredGl(glRows)
+    } else {
+      const filtered = glRows.filter((r) =>
+        r.User?.toLowerCase().includes(glFilterUser.toLowerCase())
+      )
+      setFilteredGl(filtered)
+    }
+  }
+
+  // --- CAST Popup Save ---
+  const saveCastRows = () => {
+    setTellerRows((prev) => [...prev, ...castRows])
+    recalcTotals()
+    setOpenCast(false)
+  }
+
+  // --- Export ---
+  const handleExport = () => {
     const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, "Filtered GL")
-    XLSX.writeFile(wb, "Filtered_GL.xlsx")
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tellerRows), "Teller")
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(glRows), "GL")
+    XLSX.writeFile(wb, "TellerProofResult.xlsx")
   }
+
+  // --- Recalculate Totals ---
+  const [totals, setTotals] = useState({
+    withdrawal: 0,
+    deposit: 0,
+    expense: 0,
+    wumt: 0,
+    buy: 0,
+    sell: 0,
+    glDebit: 0,
+    glCredit: 0,
+  })
+
+  const recalcTotals = () => {
+    const withdrawal = tellerRows.reduce((sum, r) => sum + safeNumber(r.WITHDRAWAL), 0)
+    const deposit = tellerRows.reduce((sum, r) => sum + safeNumber(r.DEPOSIT), 0)
+    const expense = tellerRows.reduce((sum, r) => sum + safeNumber(r.EXPENSE), 0)
+    const wumt = tellerRows.reduce((sum, r) => sum + safeNumber(r.WUMT), 0)
+
+    const glDebit = glRows
+      .filter((r) => r.Type === "DEBIT")
+      .reduce((sum, r) => sum + safeNumber(r.Amount), 0)
+    const glCredit = glRows
+      .filter((r) => r.Type === "CREDIT")
+      .reduce((sum, r) => sum + safeNumber(r.Amount), 0)
+
+    setTotals({
+      withdrawal,
+      deposit,
+      expense,
+      wumt,
+      buy: buyAmount,
+      sell: sellAmount,
+      glDebit,
+      glCredit,
+    })
+  }
+
+  useEffect(() => recalcTotals(), [tellerRows, glRows, buyAmount, sellAmount])
+
+  // --- Data switching logic (keeps your activeTab pattern) ---
+  const currentData =
+    activeTab === "gl_debit"
+      ? filteredGl.filter((r) => r.Type === "DEBIT")
+      : activeTab === "gl_credit"
+      ? filteredGl.filter((r) => r.Type === "CREDIT")
+      : tellerRows
+
+  // Keep header structure from currentData for table columns
+  const currentKeys = currentData.length > 0 ? Object.keys(currentData[0]) : []
 
   return (
-    <Card className="p-4">
-      <CardHeader>
-        <CardTitle className="text-xl font-bold">Teller GL Proof</CardTitle>
-        <CardDescription>Upload and filter your GL Excel file</CardDescription>
-      </CardHeader>
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-800 p-6">
+      <Card className="max-w-7xl mx-auto shadow-xl border-none rounded-2xl">
+        <CardHeader className="bg-gradient-to-r from-blue-600 to-teal-500 text-white rounded-t-2xl p-6">
+          <CardTitle className="text-2xl font-bold">Teller Proof Dashboard</CardTitle>
+          <CardDescription className="text-blue-100">
+            Upload Teller & GL files or input CAST for reconciliation
+          </CardDescription>
+        </CardHeader>
 
-      <CardContent>
-        {/* Upload Field */}
-        <div className="flex items-center gap-3 mb-4">
-          <Label htmlFor="upload">Upload GL Excel:</Label>
-          <Input
-            id="upload"
-            type="file"
-            accept=".xlsx, .xls"
-            onChange={handleFileUpload}
-            className="w-60"
-          />
-          <Button onClick={exportToExcel} disabled={!filteredData.length}>
-            <Download className="w-4 h-4 mr-2" /> Export
-          </Button>
-        </div>
+        <CardContent className="p-6 space-y-6">
+          {/* Upload Section */}
+          <div className="grid md:grid-cols-3 gap-6">
+            <div>
+              <Label>Teller Upload</Label>
+              <Input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                onChange={(e) => e.target.files?.[0] && parseTellerUpload(e.target.files[0])}
+              />
+              {tellerRows.length > 0 && (
+                <Badge className="mt-2 bg-green-600">{tellerRows.length} Rows Loaded</Badge>
+              )}
+            </div>
 
-        {/* Filter Buttons */}
-        <div className="flex gap-2 mb-3">
-          <Button
-            variant={filter === "Debit" ? "default" : "outline"}
-            onClick={() => setFilter("Debit")}
-          >
-            Debit
-          </Button>
-          <Button
-            variant={filter === "Credit" ? "default" : "outline"}
-            onClick={() => setFilter("Credit")}
-          >
-            Credit
-          </Button>
-          <Button
-            variant={filter === "All" ? "default" : "outline"}
-            onClick={() => setFilter("All")}
-          >
-            All
-          </Button>
-        </div>
+            <div>
+              <Label>GL Upload</Label>
+              <Input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                onChange={(e) => e.target.files?.[0] && parseGL(e.target.files[0])}
+              />
+              {glRows.length > 0 && (
+                <Badge className="mt-2 bg-blue-600">{glRows.length} GL Rows Loaded</Badge>
+              )}
+            </div>
 
-        {/* Table Display */}
-        {filteredData.length > 0 ? (
-          <div className="overflow-x-auto border rounded-md">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-100 text-left">
-                <tr>
-                  {Object.keys(filteredData[0]).map((key) => (
-                    <th key={key} className="p-2 font-semibold">
-                      {key}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filteredData.map((row, i) => (
-                  <tr
-                    key={i}
-                    className={`border-b ${
-                      row.DebitCredit === "Debit"
-                        ? "bg-red-50"
-                        : row.DebitCredit === "Credit"
-                        ? "bg-green-50"
-                        : ""
-                    }`}
-                  >
-                    {Object.values(row).map((val: any, j) => (
-                      <td key={j} className="p-2">
-                        {val}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            {/* Footer Totals */}
-            <div className="flex justify-between mt-3 p-2 bg-gray-50 border-t">
-              <Badge variant="secondary" className="text-red-700 font-bold">
-                Total Debit: ₦{totalDebit.toLocaleString()}
-              </Badge>
-              <Badge variant="secondary" className="text-green-700 font-bold">
-                Total Credit: ₦{totalCredit.toLocaleString()}
-              </Badge>
+            <div>
+              <Label>CAST Input</Label>
+              <Button onClick={() => setOpenCast(true)}>Open CAST Popup</Button>
             </div>
           </div>
-        ) : (
-          <p className="text-gray-500 text-center mt-4">
-            No data uploaded yet.
-          </p>
-        )}
-      </CardContent>
-    </Card>
+
+          {/* Buy/Sell Inputs */}
+          <div className="grid md:grid-cols-2 gap-4 mt-4">
+            <div>
+              <Label>Total Buy (₦)</Label>
+              <Input
+                type="number"
+                value={buyAmount}
+                onChange={(e) => setBuyAmount(safeNumber(e.target.value))}
+              />
+            </div>
+            <div>
+              <Label>Total Sell (₦)</Label>
+              <Input
+                type="number"
+                value={sellAmount}
+                onChange={(e) => setSellAmount(safeNumber(e.target.value))}
+              />
+            </div>
+          </div>
+
+          {/* Tabs */}
+          <div className="flex w-full mt-6">
+            {["teller_debit", "teller_credit", "gl_debit", "gl_credit"].map((tab) => (
+              <Button
+                key={tab}
+                className="flex-1"
+                variant={activeTab === tab ? "default" : "outline"}
+                onClick={() => setActiveTab(tab as any)}
+              >
+                {tab.replace("_", " ").toUpperCase()}
+              </Button>
+            ))}
+          </div>
+
+          {/* GL Filter - visible only when viewing GL tabs */}
+          {activeTab.includes("gl") && (
+            <div className="flex flex-wrap gap-3 items-center justify-center mt-4">
+              <Input
+                placeholder="Filter by User ID"
+                value={glFilterUser}
+                onChange={(e) => setGlFilterUser(e.target.value)}
+                className="w-60"
+              />
+              <Button onClick={handleFilter}>Filter</Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  // Reset GL user filter and show all GL rows
+                  setGlFilterUser("")
+                  setFilteredGl(glRows)
+                }}
+              >
+                Reset Filter
+              </Button>
+            </div>
+          )}
+
+          {/* Teller & Supervisor */}
+          <div className="grid md:grid-cols-2 gap-4 mt-6">
+            <div>
+              <Label>Teller Name</Label>
+              <Input
+                placeholder="Enter Teller Name"
+                value={tellerName}
+                onChange={(e) => setTellerName(e.target.value)}
+              />
+            </div>
+            <div>
+              <Label>Supervisor Name</Label>
+              <Input
+                placeholder="Enter Supervisor Name"
+                value={supervisorName}
+                onChange={(e) => setSupervisorName(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* Preview Table */}
+          {currentData.length > 0 ? (
+            <div className="overflow-auto border rounded-xl bg-white dark:bg-gray-700 shadow-inner mt-6 max-h-[50vh]">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    {currentKeys.map((key) => (
+                      <TableHead key={key}>{key}</TableHead>
+                    ))}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {currentData.map((row, i) => (
+                    <TableRow key={i}>
+                      {currentKeys.map((k, j) => (
+                        <TableCell key={j}>{String((row as any)[k] ?? "")}</TableCell>
+                      ))}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          ) : (
+            <div className="text-center text-sm text-gray-500 mt-6">
+              No data to display.
+            </div>
+          )}
+
+          {/* Totals Footer */}
+          <Card className="bg-gray-100 dark:bg-gray-700 p-4 mt-6">
+            {activeTab.includes("gl") ? (
+              <div className="grid md:grid-cols-2 gap-4">
+                <div>Total GL Debit: ₦{totals.glDebit.toLocaleString()}</div>
+                <div>Total GL Credit: ₦{totals.glCredit.toLocaleString()}</div>
+              </div>
+            ) : (
+              <>
+                <div className="grid md:grid-cols-3 gap-4">
+                  <div>Total Withdrawal: {totals.withdrawal.toLocaleString()}</div>
+                  <div>Total Deposit: {totals.deposit.toLocaleString()}</div>
+                  <div>Total Expenses: {totals.expense.toLocaleString()}</div>
+                </div>
+                <div className="grid md:grid-cols-2 gap-4 mt-2">
+                  <div>Total WUMT: {totals.wumt.toLocaleString()}</div>
+                  <div>Buy/Sell Diff: {(totals.buy - totals.sell).toLocaleString()}</div>
+                </div>
+              </>
+            )}
+          </Card>
+
+          {/* CAST Popup */}
+          <Dialog open={openCast} onOpenChange={setOpenCast}>
+            <DialogContent className="w-full max-w-[98vw] h-[90vh] overflow-auto">
+              <DialogHeader>
+                <DialogTitle>CAST Input</DialogTitle>
+              </DialogHeader>
+
+              <div className="overflow-auto max-h-[75vh]">
+                <Table className="w-full border">
+                  <TableHeader>
+                    <TableRow>
+                      {[
+                        "CHEQUES",
+                        "WITHDRAWAL",
+                        "ACCOUNT_NO",
+                        "SAVINGS",
+                        "ACCOUNT_NO2",
+                        "DEPOSIT",
+                        "ACCOUNT_NO3",
+                        "EXPENSE",
+                        "WUMT",
+                      ].map((col) => (
+                        <TableHead key={col}>{col}</TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {castRows.map((row, i) => (
+                      <TableRow key={i}>
+                        <TableCell>
+                          <Input
+                            type="number"
+                            value={row.WITHDRAWAL || 0}
+                            onChange={(e) => {
+                              const v = safeNumber(e.target.value)
+                              setCastRows((prev) => {
+                                const copy = [...prev]
+                                copy[i].WITHDRAWAL = v
+                                recalcTotals()
+                                return copy
+                              })
+                            }}
+                          />
+                        </TableCell>
+
+                        <TableCell>{row.ACCOUNT_NO || ""}</TableCell>
+
+                        <TableCell>
+                          <Input
+                            type="number"
+                            value={row.DEPOSIT || 0}
+                            onChange={(e) => {
+                              const v = safeNumber(e.target.value)
+                              setCastRows((prev) => {
+                                const copy = [...prev]
+                                copy[i].DEPOSIT = v
+                                recalcTotals()
+                                return copy
+                              })
+                            }}
+                          />
+                        </TableCell>
+
+                        <TableCell>{row.ACCOUNT_NO || ""}</TableCell>
+
+                        <TableCell>
+                          <Input
+                            type="number"
+                            value={row.EXPENSE || 0}
+                            onChange={(e) => {
+                              const v = safeNumber(e.target.value)
+                              setCastRows((prev) => {
+                                const copy = [...prev]
+                                copy[i].EXPENSE = v
+                                recalcTotals()
+                                return copy
+                              })
+                            }}
+                          />
+                        </TableCell>
+
+                        <TableCell>
+                          <Input
+                            type="number"
+                            value={row.WUMT || 0}
+                            onChange={(e) => {
+                              const v = safeNumber(e.target.value)
+                              setCastRows((prev) => {
+                                const copy = [...prev]
+                                copy[i].WUMT = v
+                                recalcTotals()
+                                return copy
+                              })
+                            }}
+                          />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              <div className="flex justify-end gap-4 mt-4">
+                <Button onClick={() => setOpenCast(false)} variant="outline">
+                  Cancel
+                </Button>
+                <Button onClick={saveCastRows} className="bg-teal-600 text-white">
+                  Save CAST
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          {/* Actions */}
+          <div className="flex justify-center gap-4 mt-8 flex-wrap">
+            <Button
+              onClick={handleExport}
+              className="bg-gradient-to-r from-blue-600 to-teal-500 text-white"
+            >
+              <Download className="mr-2 h-4 w-4" /> Export Result
+            </Button>
+            <Button variant="outline" onClick={() => alert("Submitted Successfully ✅")}>
+              Dummy Submit
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
   )
 }
