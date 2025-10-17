@@ -4,14 +4,14 @@ import { useState } from "react"
 import * as XLSX from "xlsx"
 import {
   Card,
-  CardContent,
   CardHeader,
   CardTitle,
   CardDescription,
+  CardContent,
 } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import {
   Table,
@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/table"
 import { Download } from "lucide-react"
 
+// Define the shape of each GL row
 type GLRow = {
   Date?: string
   Branch?: string
@@ -33,7 +34,6 @@ type GLRow = {
   User?: string
   Authorizer?: string
   Reference?: string
-  // Exception fields
   noBVN?: boolean
   noSignature?: boolean
   alteration?: boolean
@@ -43,24 +43,25 @@ type GLRow = {
   regularized?: boolean
 }
 
-export function TellerProof() {
+export default function HistoryLogs() {
   const [glRows, setGlRows] = useState<GLRow[]>([])
-  const [filteredGl, setFilteredGl] = useState<GLRow[]>([])
-  const [glFilterUser, setGlFilterUser] = useState("")
+  const [filtered, setFiltered] = useState<GLRow[]>([])
+  const [filterUser, setFilterUser] = useState("")
 
+  // Safely parse numeric values
   const safeNumber = (v: any) => {
     const s = String(v || "").replace(/[,₦$]/g, "").trim()
     const n = Number(s)
     return Number.isFinite(n) ? n : 0
   }
 
-  // --- GL Parsing ---
-  const parseGL = async (file: File) => {
+  // Handle Excel upload
+  const handleFileUpload = async (file: File) => {
     try {
       const data = await file.arrayBuffer()
       const wb = XLSX.read(data, { type: "array" })
-      const sheet = wb.Sheets[wb.SheetNames[0]]
-      const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })
+      const ws = wb.Sheets[wb.SheetNames[0]]
+      const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" })
 
       const header = raw[0].map((h) => String(h || "").trim().toLowerCase())
 
@@ -72,7 +73,7 @@ export function TellerProof() {
         Currency: String(r[header.findIndex((h) => h.includes("currency"))] || ""),
         Amount: safeNumber(r[header.findIndex((h) => h.includes("amount"))]),
         User: String(r[header.findIndex((h) => h.includes("user"))] || ""),
-        Authorizer: String(r[header.findIndex((h) => h.includes("authoriser"))] || ""),
+        Authorizer: String(r[header.findIndex((h) => h.includes("authorizer"))] || ""),
         Reference: String(r[header.findIndex((h) => h.includes("reference"))] || ""),
         noBVN: false,
         noSignature: false,
@@ -83,29 +84,24 @@ export function TellerProof() {
         regularized: false,
       }))
 
-      setGlRows(rows.filter((r) => r.AccountNo))
-      setFilteredGl(rows.filter((r) => r.AccountNo))
-      alert(`${rows.length} GL Rows Loaded ✅`)
-    } catch {
-      alert("Invalid GL file format.")
+      setGlRows(rows)
+      setFiltered(rows)
+      alert(`${rows.length} rows loaded ✅`)
+    } catch (err) {
+      console.error(err)
+      alert("Invalid Excel format ❌")
     }
   }
 
-  // --- GL Filter ---
-  const handleFilter = () => {
-    if (!glFilterUser.trim()) {
-      setFilteredGl(glRows)
-    } else {
-      const filtered = glRows.filter((r) =>
-        r.User?.toLowerCase().includes(glFilterUser.toLowerCase())
-      )
-      setFilteredGl(filtered)
-    }
+  // Filter by user field
+  const applyFilter = () => {
+    if (!filterUser.trim()) setFiltered(glRows)
+    else setFiltered(glRows.filter((r) => r.User?.toLowerCase().includes(filterUser.toLowerCase())))
   }
 
-  // --- Exception Toggle ---
-  const toggleException = (i: number, key: keyof GLRow) => {
-    setFilteredGl((prev) => {
+  // Toggle flags
+  const toggleFlag = (i: number, key: keyof GLRow) => {
+    setFiltered((prev) => {
       const copy = [...prev]
       // @ts-ignore
       copy[i][key] = !copy[i][key]
@@ -113,24 +109,15 @@ export function TellerProof() {
     })
   }
 
-  // --- Regularization Toggle ---
-  const toggleRegularized = (i: number) => {
-    setFilteredGl((prev) => {
-      const copy = [...prev]
-      copy[i].regularized = !copy[i].regularized
-      return copy
-    })
-  }
-
-  // --- Row Color based on Flags ---
-  const getRowColor = (row: GLRow) => {
+  // Get row color
+  const getRowColor = (r: GLRow) => {
     const flags = [
-      row.noBVN,
-      row.noSignature,
-      row.alteration,
-      row.noDate,
-      row.noAnalysis,
-      row.wrongNarration,
+      r.noBVN,
+      r.noSignature,
+      r.alteration,
+      r.noDate,
+      r.noAnalysis,
+      r.wrongNarration,
     ].filter(Boolean).length
 
     if (flags >= 2) return "bg-red-200 dark:bg-red-800"
@@ -138,58 +125,56 @@ export function TellerProof() {
     return ""
   }
 
-  // --- Export ---
-  const handleExport = () => {
+  // Export to Excel
+  const exportResult = () => {
     const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filteredGl), "GL Reviewed")
-    XLSX.writeFile(wb, "GL_Review_Result.xlsx")
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filtered), "GL_Reviewed")
+    XLSX.writeFile(wb, "GL_Review.xlsx")
   }
 
-  // --- Dummy Submit ---
-  const handleSubmit = () => {
-    alert("All GL entries reviewed and submitted successfully ✅")
-  }
+  // Dummy submit
+  const submitData = () => alert("All GL entries reviewed and submitted ✅")
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-800 p-6">
-      <Card className="max-w-7xl mx-auto shadow-xl border-none rounded-2xl">
-        <CardHeader className="bg-gradient-to-r from-blue-600 to-teal-500 text-white rounded-t-2xl p-6">
-          <CardTitle className="text-2xl font-bold">GL Proof Dashboard</CardTitle>
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-6">
+      <Card className="max-w-7xl mx-auto shadow-lg border-none rounded-2xl">
+        <CardHeader className="bg-gradient-to-r from-blue-600 to-cyan-500 text-white rounded-t-2xl p-6">
+          <CardTitle className="text-2xl font-semibold">History Logs (GL Review)</CardTitle>
           <CardDescription className="text-blue-100">
-            Upload GL files and mark exceptions (No BVN, No Signature, etc.)
+            Upload GL files and manually flag exceptions (test environment)
           </CardDescription>
         </CardHeader>
         <CardContent className="p-6 space-y-6">
-          {/* Upload */}
+          {/* Upload + Filter */}
           <div className="grid md:grid-cols-2 gap-6">
             <div>
-              <Label>GL Upload</Label>
+              <Label>GL Upload File</Label>
               <Input
                 type="file"
                 accept=".xlsx,.xls,.csv"
-                onChange={(e) => e.target.files?.[0] && parseGL(e.target.files[0])}
+                onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0])}
               />
               {glRows.length > 0 && (
-                <Badge className="mt-2 bg-blue-600">{glRows.length} GL Rows Loaded</Badge>
+                <Badge className="mt-2 bg-blue-600">{glRows.length} Rows Loaded</Badge>
               )}
             </div>
             <div className="flex flex-col justify-end">
               <Label>Filter by User</Label>
               <div className="flex gap-2">
                 <Input
-                  placeholder="Enter User ID"
-                  value={glFilterUser}
-                  onChange={(e) => setGlFilterUser(e.target.value)}
+                  placeholder="Enter username"
+                  value={filterUser}
+                  onChange={(e) => setFilterUser(e.target.value)}
                   className="w-60"
                 />
-                <Button onClick={handleFilter}>Filter</Button>
+                <Button onClick={applyFilter}>Filter</Button>
               </div>
             </div>
           </div>
 
           {/* Table */}
-          {filteredGl.length > 0 && (
-            <div className="overflow-auto border rounded-xl bg-white dark:bg-gray-700 shadow-inner mt-6 max-h-[70vh]">
+          {filtered.length > 0 && (
+            <div className="overflow-auto border rounded-xl bg-white dark:bg-gray-800 shadow-inner mt-6 max-h-[70vh]">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -209,24 +194,24 @@ export function TellerProof() {
                       "No Date",
                       "No Analysis",
                       "Wrong Narration",
-                      "Regularized?",
-                    ].map((col) => (
-                      <TableHead key={col}>{col}</TableHead>
+                      "Regularized",
+                    ].map((h) => (
+                      <TableHead key={h}>{h}</TableHead>
                     ))}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredGl.map((row, i) => (
-                    <TableRow key={i} className={getRowColor(row)}>
-                      <TableCell>{row.Date}</TableCell>
-                      <TableCell>{row.Branch}</TableCell>
-                      <TableCell>{row.AccountNo}</TableCell>
-                      <TableCell>{row.Type}</TableCell>
-                      <TableCell>{row.Currency}</TableCell>
-                      <TableCell>{row.Amount?.toLocaleString()}</TableCell>
-                      <TableCell>{row.User}</TableCell>
-                      <TableCell>{row.Authorizer}</TableCell>
-                      <TableCell>{row.Reference}</TableCell>
+                  {filtered.map((r, i) => (
+                    <TableRow key={i} className={getRowColor(r)}>
+                      <TableCell>{r.Date}</TableCell>
+                      <TableCell>{r.Branch}</TableCell>
+                      <TableCell>{r.AccountNo}</TableCell>
+                      <TableCell>{r.Type}</TableCell>
+                      <TableCell>{r.Currency}</TableCell>
+                      <TableCell>{r.Amount?.toLocaleString()}</TableCell>
+                      <TableCell>{r.User}</TableCell>
+                      <TableCell>{r.Authorizer}</TableCell>
+                      <TableCell>{r.Reference}</TableCell>
 
                       {[
                         "noBVN",
@@ -239,16 +224,16 @@ export function TellerProof() {
                         <TableCell key={key}>
                           <input
                             type="checkbox"
-                            checked={row[key as keyof GLRow] as boolean}
-                            onChange={() => toggleException(i, key as keyof GLRow)}
+                            checked={r[key as keyof GLRow] as boolean}
+                            onChange={() => toggleFlag(i, key as keyof GLRow)}
                           />
                         </TableCell>
                       ))}
                       <TableCell>
                         <input
                           type="checkbox"
-                          checked={row.regularized}
-                          onChange={() => toggleRegularized(i)}
+                          checked={r.regularized}
+                          onChange={() => toggleFlag(i, "regularized")}
                         />
                       </TableCell>
                     </TableRow>
@@ -259,15 +244,15 @@ export function TellerProof() {
           )}
 
           {/* Actions */}
-          {filteredGl.length > 0 && (
+          {filtered.length > 0 && (
             <div className="flex justify-center gap-4 mt-8 flex-wrap">
               <Button
-                onClick={handleExport}
-                className="bg-gradient-to-r from-blue-600 to-teal-500 text-white"
+                onClick={exportResult}
+                className="bg-gradient-to-r from-blue-600 to-cyan-500 text-white"
               >
-                <Download className="mr-2 h-4 w-4" /> Export Reviewed GL
+                <Download className="mr-2 h-4 w-4" /> Export Reviewed
               </Button>
-              <Button variant="outline" onClick={handleSubmit}>
+              <Button variant="outline" onClick={submitData}>
                 Dummy Submit
               </Button>
             </div>
