@@ -74,37 +74,100 @@ export function TellerProof() {
   }
 
   // --- Teller Upload Parsing ---
+  // New: parse rows in format:
+  // WITHDRAWAL AMOUNT | ACCOUNT NUMBER | DEPOSIT AMOUNT | ACCOUNT NUMBER | EXPENSE | WUMT
   const parseTellerUpload = async (file: File) => {
     try {
       const data = await file.arrayBuffer()
       const wb = XLSX.read(data, { type: "array" })
       const sheet = wb.Sheets[wb.SheetNames[0]]
       const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })
-      const header = raw[0]
-        .map((h) =>
-          String(h || "")
-            .replace(/\s+/g, "_")
-            .replace(/\(N\)/g, "")
-            .toUpperCase()
-        )
+
+      if (!raw || raw.length === 0) {
+        alert("Empty Teller file.")
+        return
+      }
+
+      // Normalize header row to lowercase trimmed strings for robust matching
+      const headerRow = (raw[0] || []).map((h: any) =>
+        String(h || "").trim().toLowerCase()
+      )
+
+      // Helper: find index by keyword(s)
+      const findIndexByKeywords = (keywords: string[]) => {
+        for (let i = 0; i < headerRow.length; i++) {
+          const h = headerRow[i]
+          if (!h) continue
+          for (const kw of keywords) {
+            if (h.includes(kw)) return i
+          }
+        }
+        return -1
+      }
+
+      // Find columns
+      const idxWithdrawal = findIndexByKeywords(["withdraw", "withdrawal", "withd"])
+      // There may be two account columns; collect all indexes that look like account
+      const accountIndexes: number[] = []
+      headerRow.forEach((h: string, i: number) => {
+        if (h.includes("account") || h.includes("acct") || h.includes("account number")) {
+          accountIndexes.push(i)
+        }
+      })
+      // deposit might be called "deposit amount" or "deposit"
+      const idxDeposit = findIndexByKeywords(["deposit", "depos"])
+      const idxExpense = findIndexByKeywords(["expense", "expenses"])
+      const idxWumt = findIndexByKeywords(["wumt", "w/m/t", "wmt"])
+
+      // If accountIndexes is empty, try fallback to near-by columns (common positions)
+      // We will map: withdrawal account -> first account index, deposit account -> second account index if present, else first
+      const acctIdxForWithdrawal = accountIndexes[0] ?? -1
+      const acctIdxForDeposit = accountIndexes[1] ?? accountIndexes[0] ?? -1
 
       const rows: TellerRow[] = []
-      raw.slice(1).forEach((r) => {
-        const obj: any = {}
-        header.forEach((h, i) => {
-          obj[h] = r[i]
-        })
 
-        if (safeNumber(obj["CHEQUES"]) > 0)
-          rows.push({ ACCOUNT_NO: obj["ACCOUNT_NO"] || "", WITHDRAWAL: safeNumber(obj["CHEQUES"]) })
-        if (safeNumber(obj["SAVINGS"]) > 0)
-          rows.push({ ACCOUNT_NO: obj["ACCOUNT_NO_2"] || "", WITHDRAWAL: safeNumber(obj["SAVINGS"]) })
-        if (safeNumber(obj["DEPOSIT"]) > 0)
-          rows.push({ ACCOUNT_NO: obj["ACCOUNT_NO_3"] || "", DEPOSIT: safeNumber(obj["DEPOSIT"]) })
-        if (safeNumber(obj["EXPENSE"]) > 0)
-          rows.push({ ACCOUNT_NO: obj["ACCOUNT_NO_4"] || "", EXPENSE: safeNumber(obj["EXPENSE"]) })
-        if (safeNumber(obj["WUMT"]) > 0)
-          rows.push({ ACCOUNT_NO: obj["ACCOUNT_NO_5"] || "", WUMT: safeNumber(obj["WUMT"]) })
+      // Iterate data rows (starting from second row)
+      raw.slice(1).forEach((r: any[]) => {
+        // read by index positions we found (fall back to empty string)
+        const withdrawalVal = idxWithdrawal >= 0 ? safeNumber(r[idxWithdrawal]) : 0
+        const depositVal = idxDeposit >= 0 ? safeNumber(r[idxDeposit]) : 0
+        const expenseVal = idxExpense >= 0 ? safeNumber(r[idxExpense]) : 0
+        const wumtVal = idxWumt >= 0 ? safeNumber(r[idxWumt]) : 0
+
+        const acctWithdrawal = acctIdxForWithdrawal >= 0 ? String(r[acctIdxForWithdrawal] || "").trim() : ""
+        const acctDeposit = acctIdxForDeposit >= 0 ? String(r[acctIdxForDeposit] || "").trim() : acctWithdrawal
+
+        // Push withdrawal row (if any)
+        if (withdrawalVal > 0) {
+          rows.push({
+            ACCOUNT_NO: acctWithdrawal || "",
+            WITHDRAWAL: withdrawalVal,
+          })
+        }
+
+        // Push deposit row (if any)
+        if (depositVal > 0) {
+          rows.push({
+            ACCOUNT_NO: acctDeposit || acctWithdrawal || "",
+            DEPOSIT: depositVal,
+          })
+        }
+
+        // Push expense row (if any) - attach to withdrawal account if deposit account not appropriate
+        if (expenseVal > 0) {
+          rows.push({
+            ACCOUNT_NO: acctWithdrawal || acctDeposit || "",
+            EXPENSE: expenseVal,
+          })
+        }
+
+        // Push WUMT row (if any)
+        if (wumtVal > 0) {
+          rows.push({
+            ACCOUNT_NO: acctWithdrawal || acctDeposit || "",
+            WUMT: wumtVal,
+          })
+        }
       })
 
       setTellerRows(rows)
